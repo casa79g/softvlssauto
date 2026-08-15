@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# CF Tunnel + VLESS 自动部署脚本 v1.2
+# CF Tunnel + VLESS 自动部署脚本 v1.3
 # 网络学习节点部署工具
 # 用法: bash install.sh
 # 无交互: export CF_TOKEN=... CF_HOST=... && bash install.sh
@@ -85,7 +85,7 @@ scan_port() {
 # 获取占用端口的进程信息
 get_port_info() {
   local port="$1"
-  ss -tlnp "sport = :$port" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1
+  ss -tlnp "sport = :$port" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | head -1 || true
 }
 
 get_port_cmd() {
@@ -147,6 +147,10 @@ kill_port_process() {
 }
 
 scan_all_ports() {
+  local STATUS EXTRA pid cmd_info
+  STATUS=""
+  EXTRA=""
+
   printf "  ${GREEN}[INFO]${NC} 正在扫描常用端口...\n\n"
   printf "  %s┌──────────┬────────┬──────────────────────┐%s\n" "${BOLD}" "${NC}"
   printf "  %s│  端口    │ 状态   │ 占用进程            │%s\n" "${BOLD}" "${NC}"
@@ -154,10 +158,9 @@ scan_all_ports() {
 
   for PORT in 80 443 8001 8002 8080 8443 3000; do
     if scan_port "$PORT"; then
-      local pid cmd_info
-      pid=$(get_port_info "$PORT")
+      pid=$(get_port_info "$PORT") || true
       if [ -n "$pid" ]; then
-        cmd_info=$(get_port_cmd "$pid" | sed 's/ /_/g' | cut -c1-20)
+        cmd_info=$(get_port_cmd "$pid" 2>/dev/null | sed 's/ /_/g' | cut -c1-20) || true
         STATUS="${RED}已占用${NC}"
         EXTRA="PID:$pid ${cmd_info:0:18}"
       else
