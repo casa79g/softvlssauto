@@ -267,17 +267,25 @@ get_latest_release() {
   curl -sL "https://api.github.com/repos/$1/releases/latest" | jq -r '.tag_name' 2>/dev/null || echo "$2"
 }
 
+# 映射 uname -m 到 release 文件名
+if [ "$ARCH" = "x86_64" ]; then
+  RELEASE_ARCH="amd64"
+elif [ "$ARCH" = "aarch64" ]; then
+  RELEASE_ARCH="arm64"
+else
+  RELEASE_ARCH="$ARCH"
+fi
+
 # 下载 sing-box
 SB_VERSION=$(get_latest_release "SagerNet/sing-box" "v1.13.0")
 SB_VERSION="${SB_VERSION:-v1.13.0}"
 SB_TAG="${SB_VERSION#v}"
-SB_URL="https://github.com/SagerNet/sing-box/releases/download/${SB_VERSION}/sing-box-${SB_TAG}-linux-${ARCH}"
-if [ "$ARCH" = "aarch64" ]; then SB_URL="https://github.com/SagerNet/sing-box/releases/download/${SB_VERSION}/sing-box-${SB_TAG}-linux-arm64"; fi
+SB_URL="https://github.com/SagerNet/sing-box/releases/download/${SB_VERSION}/sing-box-${SB_TAG}-linux-${RELEASE_ARCH}"
 
 info "下载 sing-box $SB_VERSION ..."
 DOWNLOAD_URLS=(
   "$SB_URL"
-  "https://github.com/SagerNet/sing-box/releases/latest/download/sing-box-${SB_TAG}-linux-${ARCH}"
+  "https://github.com/SagerNet/sing-box/releases/latest/download/sing-box-${SB_TAG}-linux-${RELEASE_ARCH}"
 )
 SB_DOWNLOAD_OK=0
 for try_url in "${DOWNLOAD_URLS[@]}"; do
@@ -294,11 +302,8 @@ info "sing-box 下载完成: $(sing-box version 2>&1 | head -1)"
 # 下载 cloudflared
 info "下载 cloudflared ..."
 CF_URLS=(
-  "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}.deb"
+  "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${RELEASE_ARCH}.deb"
 )
-if [ "$ARCH" = "aarch64" ]; then
-  CF_URLS=("https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.deb")
-fi
 
 mkdir -p /tmp/cf-deb
 CF_DEB_OK=0
@@ -318,7 +323,9 @@ if [ -f /tmp/cf-deb/usr/bin/cloudflared ] && file /tmp/cf-deb/usr/bin/cloudflare
   cp /tmp/cf-deb/usr/bin/cloudflared /usr/local/bin/cloudflared
   chmod +x /usr/local/bin/cloudflared
 else
-  for try_url in "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}" \
+  # 回退：直接下载裸二进制
+  for try_url in "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${RELEASE_ARCH}" \
+                 "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64" \
                  "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64"; do
     curl -sL -o /usr/local/bin/cloudflared "$try_url" 2>/dev/null
     if [ -f /usr/local/bin/cloudflared ] && file /usr/local/bin/cloudflared | grep -qi "ELF"; then
