@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# CF Tunnel + VLESS 自动部署脚本 v1.5
+# CF Tunnel + VLESS 自动部署脚本 v1.6
 # 网络学习节点部署工具
 # 用法: bash install.sh
 # 无交互: export CF_TOKEN=... CF_HOST=... && bash install.sh
@@ -23,15 +23,54 @@ step()  { echo -e "\n${BOLD}━━━━━━━━━━━━━━━━━�
 TUNNEL_NAME=""; CF_TOKEN=""; CF_HOST=""; SB_PORT=""; WS_PATH=""; UUID=""
 PREF_DOMAIN=""; USE_GRPC="n"
 NON_INTERACTIVE=0
+if [ -n "${CF_TOKEN:-}" ] && [ -n "${CF_HOST:-}" ]; then
+  NON_INTERACTIVE=1
+fi
 ARCH=$(uname -m)
 NOW=$(date +%Y-%m-%d_%H%M%S)
 SB_DIR="/etc/sing-box"
 SUB_FILE="/root/sub.txt"
 
-# ── 检测是否无交互模式（所有关键参数已通过环境变量提供）──
-if [ -n "${CF_TOKEN:-}" ] && [ -n "${CF_HOST:-}" ]; then
-  NON_INTERACTIVE=1
+# ── 检测 systemd 是否可用 ──
+USE_SYSTEMD=0
+if [ -d /run/systemd/system ] || systemctl is-system-running >/dev/null 2>&1; then
+  USE_SYSTEMD=1
 fi
+
+# ── 启动后台进程（systemd 不可用时回退用）──
+start_bg() {
+  local name="$1"
+  local cmd="$2"
+  local log="$3"
+
+  if [ "$USE_SYSTEMD" -eq 1 ]; then
+    systemctl enable "$name.service" 2>/dev/null || true
+    systemctl start "$name.service" 2>/dev/null || true
+  else
+    info "systemd 不可用，使用 nohup 后台运行"
+    nohup $cmd >> "$log" 2>&1 &
+    sleep 2
+  fi
+}
+
+stop_bg() {
+  local name="$1"
+  if [ "$USE_SYSTEMD" -eq 1 ]; then
+    systemctl stop "$name.service" 2>/dev/null || true
+  else
+    pkill -f "$name" 2>/dev/null || true
+  fi
+}
+
+# ── 检查进程是否运行 ──
+check_bg() {
+  local pattern="$1"
+  if [ "$USE_SYSTEMD" -eq 1 ]; then
+    systemctl is-active --quiet "$(echo "$pattern" | cut -d'-' -f1)-vless" 2>/dev/null
+  else
+    pgrep -f "$pattern" >/dev/null 2>&1
+  fi
+}
 
 # ================================================================
 # Step 1 — 系统检测
@@ -632,18 +671,30 @@ info "systemd 服务已写入"
 # ================================================================
 step "Step 7/10 — 启动服务"
 
-systemctl enable sing-box-vless.service
-systemctl start sing-box-vless.service
+start_bg "sing-box-vless" "/usr/local/bin/sing-box run -c $SB_DIR/sb.json" "/tmp/sing-box-vless.log"
 sleep 2
-info "sing-box 启动完成 (PID: $(pgrep -f 'sing-box' | head -1 || echo 'N/A'))"
 
-systemctl enable cloudflared-tunnel.service
-systemctl start cloudflared-tunnel.service
+if pgrep -f 'sing-box' >/dev/null 2>&1; then
+  info "sing-box 启动完成 (PID: $(pgrep -f 'sing-box' | head -1))"
+else
+  warn "sing-box 启动异常，请查看 /tmp/sing-box-vless.log"
+fi
+
+start_bg "cloudflared-tunnel" '/usr/local/bin/cloudflared tunnel run --token "$(cat /root/cf-tunnel.conf | grep CF_TOKEN | cut -d'"'"'"'"'"' -f2)" --protocol http2' "/tmp/cloudflared-tunnel.log"
 sleep 3
-info "cloudflared 启动完成 (PID: $(pgrep -f cloudflared | head -1 || echo 'N/A'))"
+
+if pgrep -f 'cloudflared' >/dev/null 2>&1; then
+  info "cloudflared 启动完成 (PID: $(pgrep -f cloudflared | head -1))"
+else
+  warn "cloudflared 启动异常，请查看 /tmp/cloudflared-tunnel.log"
+fi
 
 CF_CONN=$(journalctl -u cloudflared-tunnel --no-pager -n 20 2>/dev/null | grep -ci "connected\|quic\|http2" || echo 0)
-info "cloudflared 连接状态: $CF_CONN 条活动连接"
+if [ "$USE_SYSTEMD" -eq 1 ]; then
+  info "cloudflared 连接状态: $CF_CONN 条活动连接"
+else
+  info "cloudflared 连接状态: 请查看 /tmp/cloudflared-tunnel.log"
+fi
 
 # ================================================================
 # Step 8 — 连通性测试
@@ -764,7 +815,15 @@ info "全部完成！"
 echo ""
 info "后续管理命令："
 echo "  查询节点:    cat /root/sub.txt"
-echo "  查看日志:    journalctl -u sing-box-vless -f"
-echo "  重启服务:    systemctl restart sing-box-vless cloudflared-tunnel"
-echo "  停止服务:    systemctl stop sing-box-vless cloudflared-tunnel"
+if [ "$USE_SYSTEMD" -eq 1 ]; then
+  echo "  查看日志:    journalctl -u sing-box-vless -f"
+  echo "  重启服务:    systemctl restart sing-box-vless cloudflared-tunnel"
+  echo "  停止服务:    systemctl stop sing-box-vless cloudflared-tunnel"
+else
+  echo "  [nohup 模式] systemd 不可用，以下命令替代："
+  echo "  查看日志:    tail -f /tmp/sing-box-vless.log"
+  echo "  重启服务:    bash /root/softvlssauto/install.sh restart"
+  echo "  停止服务:    pkill -f 'sing-box run'"
+  echo "  重启后:     重新运行 install.sh（无 systemd 无法自动启动）"
+fi
 echo "  卸载清理:    bash $0 uninstall"
