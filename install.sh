@@ -276,69 +276,77 @@ else
   RELEASE_ARCH="$ARCH"
 fi
 
+# 下载源优先级：NAS 本地 > GitHub
+NAS_BASE="${NAS_BASE:-http://47.84.122.196:8900}"
+SB_VERSION="${SB_VERSION:-1.13.18}"
+
 # 下载 sing-box
-SB_VERSION=$(get_latest_release "SagerNet/sing-box" "v1.13.0")
-SB_VERSION="${SB_VERSION:-v1.13.0}"
-SB_TAG="${SB_VERSION#v}"
-SB_URL="https://github.com/SagerNet/sing-box/releases/download/${SB_VERSION}/sing-box-${SB_TAG}-linux-${RELEASE_ARCH}"
-
-info "下载 sing-box $SB_VERSION ..."
-DOWNLOAD_URLS=(
-  "$SB_URL"
-  "https://github.com/SagerNet/sing-box/releases/latest/download/sing-box-${SB_TAG}-linux-${RELEASE_ARCH}"
-)
+info "下载 sing-box ..."
 SB_DOWNLOAD_OK=0
-for try_url in "${DOWNLOAD_URLS[@]}"; do
-  curl -sL -o /usr/local/bin/sing-box "$try_url" 2>/dev/null
-  if [ -f /usr/local/bin/sing-box ] && file /usr/local/bin/sing-box | grep -qi "ELF"; then
-    SB_DOWNLOAD_OK=1
-    break
-  fi
-done
-[ "$SB_DOWNLOAD_OK" -eq 0 ] && error "sing-box 下载失败，请检查网络或架构 (当前: $ARCH)"
-chmod +x /usr/local/bin/sing-box
-info "sing-box 下载完成: $(sing-box version 2>&1 | head -1)"
 
-# 下载 cloudflared
-info "下载 cloudflared ..."
-CF_URLS=(
-  "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${RELEASE_ARCH}.deb"
-)
-
-mkdir -p /tmp/cf-deb
-CF_DEB_OK=0
-for try_url in "${CF_URLS[@]}"; do
-  curl -sL -o /tmp/cf-deb/cloudflared.deb "$try_url" 2>/dev/null
-  if [ -f /tmp/cf-deb/cloudflared.deb ] && file /tmp/cf-deb/cloudflared.deb | grep -qi "deb\|archive"; then
-    CF_DEB_OK=1
-    break
-  fi
-done
-if [ "$CF_DEB_OK" -eq 0 ]; then
-  error "cloudflared .deb 下载失败，请检查网络或架构 (当前: $ARCH)"
+# 优先从 NAS 下载
+curl -sL -o /usr/local/bin/sing-box "${NAS_BASE}/sing-box" 2>/dev/null
+if [ -f /usr/local/bin/sing-box ] && [ "$(xxd -l 4 /usr/local/bin/sing-box 2>/dev/null | awk '{print $2}')" = "7f45" ]; then
+  SB_DOWNLOAD_OK=1
+  info "从 NAS 下载 sing-box 完成"
 fi
 
-dpkg -x /tmp/cf-deb/cloudflared.deb /tmp/cf-deb/ 2>/dev/null || true
-if [ -f /tmp/cf-deb/usr/bin/cloudflared ] && file /tmp/cf-deb/usr/bin/cloudflared | grep -qi "ELF"; then
-  cp /tmp/cf-deb/usr/bin/cloudflared /usr/local/bin/cloudflared
-  chmod +x /usr/local/bin/cloudflared
-else
-  # 回退：直接下载裸二进制
-  for try_url in "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${RELEASE_ARCH}" \
-                 "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64" \
-                 "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64"; do
-    curl -sL -o /usr/local/bin/cloudflared "$try_url" 2>/dev/null
-    if [ -f /usr/local/bin/cloudflared ] && file /usr/local/bin/cloudflared | grep -qi "ELF"; then
-      chmod +x /usr/local/bin/cloudflared
+# NAS 不可达则尝试 GitHub
+if [ "$SB_DOWNLOAD_OK" -eq 0 ]; then
+  SB_TAG="$SB_VERSION"
+  SB_URL="https://github.com/SagerNet/sing-box/releases/download/v${SB_VERSION}/sing-box-${SB_TAG}-linux-${RELEASE_ARCH}"
+  DOWNLOAD_URLS=("$SB_URL" "https://github.com/SagerNet/sing-box/releases/latest/download/sing-box-${SB_TAG}-linux-${RELEASE_ARCH}")
+  for try_url in "${DOWNLOAD_URLS[@]}"; do
+    curl -sL -o /usr/local/bin/sing-box "$try_url" 2>/dev/null
+    if [ -f /usr/local/bin/sing-box ] && [ "$(xxd -l 4 /usr/local/bin/sing-box 2>/dev/null | awk '{print $2}')" = "7f45" ]; then
+      SB_DOWNLOAD_OK=1
       break
     fi
   done
-  if [ ! -f /usr/local/bin/cloudflared ] || ! file /usr/local/bin/cloudflared | grep -qi "ELF"; then
-    error "cloudflared 下载失败，请检查网络或架构 (当前: $ARCH)"
-  fi
 fi
-rm -rf /tmp/cf-deb
-info "cloudflared 下载完成: $(cloudflared --version 2>&1 | head -1)"
+[ "$SB_DOWNLOAD_OK" -eq 0 ] && error "sing-box 下载失败，请检查网络或 NAS 是否可达 (当前: $ARCH)"
+chmod +x /usr/local/bin/sing-box
+info "sing-box 下载完成: $(sing-box version 2>&1 | head -1 || echo '版本检测跳过')"
+
+# 下载 cloudflared
+info "下载 cloudflared ..."
+CF_DOWNLOAD_OK=0
+
+# 优先从 NAS 下载
+curl -sL -o /usr/local/bin/cloudflared "${NAS_BASE}/cloudflared" 2>/dev/null
+if [ -f /usr/local/bin/cloudflared ] && [ "$(xxd -l 4 /usr/local/bin/cloudflared 2>/dev/null | awk '{print $2}')" = "7f45" ]; then
+  CF_DOWNLOAD_OK=1
+  info "从 NAS 下载 cloudflared 完成"
+fi
+
+# NAS 不可达则尝试 GitHub
+if [ "$CF_DOWNLOAD_OK" -eq 0 ]; then
+  mkdir -p /tmp/cf-deb
+  for try_url in "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${RELEASE_ARCH}.deb"; do
+    curl -sL -o /tmp/cf-deb/cloudflared.deb "$try_url" 2>/dev/null
+    if [ -f /tmp/cf-deb/cloudflared.deb ] && [ "$(xxd -l 4 /tmp/cf-deb/cloudflared.deb 2>/dev/null | awk '{print $2}')" = "7f45" ]; then
+      # .deb 也是 ELF
+      cp /tmp/cf-deb/cloudflared.deb /usr/local/bin/cloudflared
+      CF_DOWNLOAD_OK=1
+      break
+    fi
+  done
+  rm -rf /tmp/cf-deb
+fi
+
+if [ "$CF_DOWNLOAD_OK" -eq 0 ]; then
+  # 最后尝试裸二进制
+  for try_url in "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${RELEASE_ARCH}"; do
+    curl -sL -o /usr/local/bin/cloudflared "$try_url" 2>/dev/null
+    if [ -f /usr/local/bin/cloudflared ] && [ "$(xxd -l 4 /usr/local/bin/cloudflared 2>/dev/null | awk '{print $2}')" = "7f45" ]; then
+      CF_DOWNLOAD_OK=1
+      break
+    fi
+  done
+fi
+[ "$CF_DOWNLOAD_OK" -eq 0 ] && error "cloudflared 下载失败，请检查网络或 NAS 是否可达 (当前: $ARCH)"
+chmod +x /usr/local/bin/cloudflared
+info "cloudflared 下载完成"
 
 # ================================================================
 # Step 4 — 参数配置
