@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# CF Tunnel + VLESS 自动部署脚本 v1.7
+# CF Tunnel + VLESS 自动部署脚本 v1.8
 # 网络学习节点部署工具
 # 用法: bash install.sh
 # 无交互: export CF_TOKEN=... CF_HOST=... && bash install.sh
@@ -37,36 +37,19 @@ if [ "$(cat /proc/1/comm 2>/dev/null)" = "systemd" ]; then
   USE_SYSTEMD=1
 fi
 
-# ── 启动后台进程（systemd 不可用时回退用）──
+# ── 启动后台进程（直接 nohup，不用函数封装避免引号展开问题）──
 start_bg() {
-  local name="$1"
-  local cmd="$2"
-  local log="$3"
-
+  local cmd="$1"
+  local log="$2"
   if [ "$USE_SYSTEMD" -eq 1 ]; then
-    systemctl enable "$name.service" 2>/dev/null || true
-    systemctl start "$name.service" 2>/dev/null || true
+    systemctl enable "$cmd" 2>/dev/null || true
+    systemctl start "$cmd" 2>/dev/null || true
   else
     info "systemd 不可用，使用 nohup 后台运行"
-    nohup $cmd >> "$log" 2>&1 &
+    eval nohup "$cmd" >> "$log" 2>&1 &
     sleep 2
   fi
 }
-
-stop_bg() {
-  local name="$1"
-  if [ "$USE_SYSTEMD" -eq 1 ]; then
-    systemctl stop "$name.service" 2>/dev/null || true
-  else
-    pkill -f "$name" 2>/dev/null || true
-  fi
-}
-
-# ── 检查进程是否运行 ──
-check_bg() {
-  local pattern="$1"
-  if [ "$USE_SYSTEMD" -eq 1 ]; then
-    systemctl is-active --quiet "$(echo "$pattern" | cut -d'-' -f1)-vless" 2>/dev/null
   else
     pgrep -f "$pattern" >/dev/null 2>&1
   fi
@@ -677,22 +660,33 @@ fi
 # ================================================================
 step "Step 7/10 — 启动服务"
 
-start_bg "sing-box-vless" "/usr/local/bin/sing-box run -c $SB_DIR/sb.json" "/tmp/sing-box-vless.log"
-sleep 2
-
-if pgrep -f 'sing-box' >/dev/null 2>&1; then
-  info "sing-box 启动完成 (PID: $(pgrep -f 'sing-box' | head -1))"
+if [ "$USE_SYSTEMD" -eq 1 ]; then
+  systemctl daemon-reload
+  systemctl start sing-box-vless.service 2>/dev/null || true
+  sleep 2
+  systemctl start cloudflared-tunnel.service 2>/dev/null || true
+  sleep 3
+  systemctl is-active --quiet sing-box-vless.service && info "sing-box systemd 运行中" || warn "sing-box systemd 启动异常"
+  systemctl is-active --quiet cloudflared-tunnel.service && info "cloudflared systemd 运行中" || warn "cloudflared systemd 启动异常"
 else
-  warn "sing-box 启动异常，请查看 /tmp/sing-box-vless.log"
-fi
+  info "systemd 不可用，使用 nohup 后台启动"
 
-start_bg "cloudflared-tunnel" '/usr/local/bin/cloudflared tunnel run --token "$(cat /root/cf-tunnel.conf | grep CF_TOKEN | cut -d'"'"'"'"'"' -f2)" --protocol http2' "/tmp/cloudflared-tunnel.log"
-sleep 3
+  nohup /usr/local/bin/sing-box run -c $SB_DIR/sb.json > /tmp/sing-box-vless.log 2>&1 &
+  sleep 2
+  if pgrep -f 'sing-box' >/dev/null 2>&1; then
+    info "sing-box 已启动 (PID: $(pgrep -f 'sing-box' | head -1))"
+  else
+    warn "sing-box 启动异常，日志: /tmp/sing-box-vless.log"
+  fi
 
-if pgrep -f 'cloudflared' >/dev/null 2>&1; then
-  info "cloudflared 启动完成 (PID: $(pgrep -f cloudflared | head -1))"
-else
-  warn "cloudflared 启动异常，请查看 /tmp/cloudflared-tunnel.log"
+  CF_TOKEN_VALUE=$(grep CF_TOKEN /root/cf-tunnel.conf | cut -d'"' -f2)
+  nohup /usr/local/bin/cloudflared tunnel run --token "$CF_TOKEN_VALUE" --protocol http2 > /tmp/cloudflared-tunnel.log 2>&1 &
+  sleep 3
+  if pgrep -f 'cloudflared' >/dev/null 2>&1; then
+    info "cloudflared 已启动 (PID: $(pgrep -f cloudflared | head -1))"
+  else
+    warn "cloudflared 启动异常，日志: /tmp/cloudflared-tunnel.log"
+  fi
 fi
 
 CF_CONN=$(journalctl -u cloudflared-tunnel --no-pager -n 20 2>/dev/null | grep -ci "connected\|quic\|http2" || echo 0)
