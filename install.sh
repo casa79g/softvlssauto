@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# CF Tunnel + VLESS 自动部署脚本 v1.3
+# CF Tunnel + VLESS 自动部署脚本 v1.5
 # 网络学习节点部署工具
 # 用法: bash install.sh
 # 无交互: export CF_TOKEN=... CF_HOST=... && bash install.sh
@@ -259,6 +259,36 @@ fi
 info "sing-box 将监听端口: $SB_PORT"
 
 # ================================================================
+# Step 2.5 — 网络检测
+# ================================================================
+step "Step 2.5/10 — 网络检测"
+
+GITHUB_REACHABLE=0
+NAS_REACHABLE=0
+
+# 检测 GitHub 可达性
+curl -sI --max-time 5 https://github.com >/dev/null 2>&1 && GITHUB_REACHABLE=1
+
+# 检测 NAS 本地源可达性
+NAS_BASE="${NAS_BASE:-http://47.84.122.196:8900}"
+curl -sI --max-time 5 "${NAS_BASE}/sing-box" >/dev/null 2>&1 && NAS_REACHABLE=1
+
+echo "  ${GREEN}[INFO]${NC} 下载源检测:"
+if [ "$NAS_REACHABLE" -eq 1 ]; then
+  echo "  ${GREEN}  ✓ NAS 本地源: $NAS_BASE 可达（优先使用）${NC}"
+else
+  echo "  ${YELLOW}  ✗ NAS 本地源: 不可达${NC}"
+fi
+if [ "$GITHUB_REACHABLE" -eq 1 ]; then
+  echo "  ${GREEN}  ✓ GitHub: 可达${NC}"
+else
+  echo "  ${YELLOW}  ✗ GitHub: 不可达（将通过 NAS 本地源下载）${NC}"
+fi
+if [ "$GITHUB_REACHABLE" -eq 0 ] && [ "$NAS_REACHABLE" -eq 0 ]; then
+  error "所有下载源均不可达，请检查网络或 NAS HTTP 服务器是否运行"
+fi
+
+# ================================================================
 # Step 3 — 下载二进制
 # ================================================================
 step "Step 3/10 — 下载二进制"
@@ -276,75 +306,86 @@ else
   RELEASE_ARCH="$ARCH"
 fi
 
-# 下载源优先级：NAS 本地 > GitHub
+# NAS 本地 HTTP 服务器地址（ECI 容器专用，普通 VPS 自动跳过）
 NAS_BASE="${NAS_BASE:-http://47.84.122.196:8900}"
-SB_VERSION="${SB_VERSION:-1.13.18}"
 
-# 下载 sing-box
+# 检测 NAS 是否可达
+NAS_REACHABLE=0
+curl -sI --max-time 5 "${NAS_BASE}/sing-box" >/dev/null 2>&1 && NAS_REACHABLE=1
+
+# 下载 sing-box（tar.gz 格式，与 sing-box-yg 一致）
+SB_VERSION="${SB_VERSION:-1.13.18}"
+SB_TARBALL="sing-box-${SB_VERSION}-linux-${RELEASE_ARCH}.tar.gz"
+SB_URL="https://github.com/SagerNet/sing-box/releases/download/v${SB_VERSION}/${SB_TARBALL}"
+SB_MIRROR="https://gitlab.com/rwkgyg/sing-box-yg/-/raw/main/${SB_TARBALL}"
+
 info "下载 sing-box ..."
 SB_DOWNLOAD_OK=0
 
-# 优先从 NAS 下载
-curl -sL -o /usr/local/bin/sing-box "${NAS_BASE}/sing-box" 2>/dev/null
-if [ -f /usr/local/bin/sing-box ] && [ "$(xxd -l 4 /usr/local/bin/sing-box 2>/dev/null | awk '{print $2}')" = "7f45" ]; then
-  SB_DOWNLOAD_OK=1
-  info "从 NAS 下载 sing-box 完成"
+# 优先从 NAS 下载（本地裸二进制）
+if [ "$NAS_REACHABLE" -eq 1 ]; then
+  curl -sL -o /usr/local/bin/sing-box "${NAS_BASE}/sing-box" --retry 2 2>/dev/null
+  if [ -f /usr/local/bin/sing-box ] && [ "$(xxd -l 4 /usr/local/bin/sing-box 2>/dev/null | awk '{print $2}')" = "7f45" ]; then
+    SB_DOWNLOAD_OK=1
+    info "从 NAS 本地下载完成"
+  fi
 fi
 
-# NAS 不可达则尝试 GitHub
+# NAS 不可达则从 GitHub/GitLab 下载 tar.gz
 if [ "$SB_DOWNLOAD_OK" -eq 0 ]; then
-  SB_TAG="$SB_VERSION"
-  SB_URL="https://github.com/SagerNet/sing-box/releases/download/v${SB_VERSION}/sing-box-${SB_TAG}-linux-${RELEASE_ARCH}"
-  DOWNLOAD_URLS=("$SB_URL" "https://github.com/SagerNet/sing-box/releases/latest/download/sing-box-${SB_TAG}-linux-${RELEASE_ARCH}")
-  for try_url in "${DOWNLOAD_URLS[@]}"; do
-    curl -sL -o /usr/local/bin/sing-box "$try_url" 2>/dev/null
-    if [ -f /usr/local/bin/sing-box ] && [ "$(xxd -l 4 /usr/local/bin/sing-box 2>/dev/null | awk '{print $2}')" = "7f45" ]; then
-      SB_DOWNLOAD_OK=1
-      break
+  mkdir -p /tmp/sb-dl
+  SB_URLS=("$SB_URL" "$SB_MIRROR" "https://github.com/SagerNet/sing-box/releases/latest/download/${SB_TARBALL}")
+  for try_url in "${SB_URLS[@]}"; do
+    curl -sL -o /tmp/sb-dl/sing-box.tar.gz "$try_url" --retry 2 2>/dev/null
+    if [ -f /tmp/sb-dl/sing-box.tar.gz ] && [ "$(xxd -l 2 /tmp/sb-dl/sing-box.tar.gz 2>/dev/null | awk '{print $2}')" = "1f8b" ]; then
+      tar xzf /tmp/sb-dl/sing-box.tar.gz -C /tmp/sb-dl/ 2>/dev/null
+      EXTRACTED=$(find /tmp/sb-dl -name "sing-box" -type f -size +1M 2>/dev/null | head -1)
+      if [ -n "$EXTRACTED" ]; then
+        cp "$EXTRACTED" /usr/local/bin/sing-box
+        SB_DOWNLOAD_OK=1
+        break
+      fi
     fi
   done
+  rm -rf /tmp/sb-dl
 fi
-[ "$SB_DOWNLOAD_OK" -eq 0 ] && error "sing-box 下载失败，请检查网络或 NAS 是否可达 (当前: $ARCH)"
+
+[ "$SB_DOWNLOAD_OK" -eq 0 ] && error "sing-box 下载失败。请检查网络是否可以访问 GitHub；ECI 容器请确认 NAS 47.84.122.196:8900 可达"
 chmod +x /usr/local/bin/sing-box
-info "sing-box 下载完成: $(sing-box version 2>&1 | head -1 || echo '版本检测跳过')"
+info "sing-box 下载完成"
 
 # 下载 cloudflared
 info "下载 cloudflared ..."
+CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${RELEASE_ARCH}"
+CF_MIRROR="https://gitlab.com/rwkgyg/sing-box-yg/-/raw/main/${RELEASE_ARCH}"
+CF_DEB_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${RELEASE_ARCH}.deb"
+
 CF_DOWNLOAD_OK=0
 
 # 优先从 NAS 下载
-curl -sL -o /usr/local/bin/cloudflared "${NAS_BASE}/cloudflared" 2>/dev/null
-if [ -f /usr/local/bin/cloudflared ] && [ "$(xxd -l 4 /usr/local/bin/cloudflared 2>/dev/null | awk '{print $2}')" = "7f45" ]; then
-  CF_DOWNLOAD_OK=1
-  info "从 NAS 下载 cloudflared 完成"
+if [ "$NAS_REACHABLE" -eq 1 ]; then
+  curl -sL -o /usr/local/bin/cloudflared "${NAS_BASE}/cloudflared" --retry 2 2>/dev/null
+  if [ -f /usr/local/bin/cloudflared ] && [ "$(xxd -l 4 /usr/local/bin/cloudflared 2>/dev/null | awk '{print $2}')" = "7f45" ]; then
+    CF_DOWNLOAD_OK=1
+    info "从 NAS 本地下载完成"
+  fi
 fi
 
-# NAS 不可达则尝试 GitHub
+# NAS 不可达则尝试裸二进制
 if [ "$CF_DOWNLOAD_OK" -eq 0 ]; then
-  mkdir -p /tmp/cf-deb
-  for try_url in "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${RELEASE_ARCH}.deb"; do
-    curl -sL -o /tmp/cf-deb/cloudflared.deb "$try_url" 2>/dev/null
-    if [ -f /tmp/cf-deb/cloudflared.deb ] && [ "$(xxd -l 4 /tmp/cf-deb/cloudflared.deb 2>/dev/null | awk '{print $2}')" = "7f45" ]; then
-      # .deb 也是 ELF
-      cp /tmp/cf-deb/cloudflared.deb /usr/local/bin/cloudflared
+  CF_URLS=("$CF_URL" "$CF_MIRROR" "$CF_DEB_URL")
+  for try_url in "${CF_URLS[@]}"; do
+    curl -sL -o /tmp/cf-binary "$try_url" --retry 2 2>/dev/null
+    if [ -f /tmp/cf-binary ] && [ "$(xxd -l 4 /tmp/cf-binary 2>/dev/null | awk '{print $2}')" = "7f45" ]; then
+      cp /tmp/cf-binary /usr/local/bin/cloudflared
       CF_DOWNLOAD_OK=1
       break
     fi
   done
-  rm -rf /tmp/cf-deb
+  rm -f /tmp/cf-binary
 fi
 
-if [ "$CF_DOWNLOAD_OK" -eq 0 ]; then
-  # 最后尝试裸二进制
-  for try_url in "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${RELEASE_ARCH}"; do
-    curl -sL -o /usr/local/bin/cloudflared "$try_url" 2>/dev/null
-    if [ -f /usr/local/bin/cloudflared ] && [ "$(xxd -l 4 /usr/local/bin/cloudflared 2>/dev/null | awk '{print $2}')" = "7f45" ]; then
-      CF_DOWNLOAD_OK=1
-      break
-    fi
-  done
-fi
-[ "$CF_DOWNLOAD_OK" -eq 0 ] && error "cloudflared 下载失败，请检查网络或 NAS 是否可达 (当前: $ARCH)"
+[ "$CF_DOWNLOAD_OK" -eq 0 ] && error "cloudflared 下载失败。请检查网络是否可以访问 GitHub；ECI 容器请确认 NAS 47.84.122.196:8900 可达"
 chmod +x /usr/local/bin/cloudflared
 info "cloudflared 下载完成"
 
