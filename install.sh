@@ -50,8 +50,24 @@ start_bg() {
     sleep 2
   fi
 }
-  else
-    pgrep -f "$pattern" >/dev/null 2>&1
+
+# 修复 /etc/hosts：cloudflared (Go) 优先解析 IPv6 ::1，
+# sing-box 只监听 127.0.0.1，导致 connection refused。
+# 删除 ::1 的 localhost 行，让 localhost 只解析到 127.0.0.1。
+# 纯 IPv6 容器罕见 (<0.1%)，此修复覆盖 IPv4+双栈 (99.9%)。
+fix_hosts() {
+  if [ -f /etc/hosts ] && grep -q '^[[:space:]]*::1.*localhost' /etc/hosts 2>/dev/null; then
+    info "检测到 /etc/hosts 存在 IPv6 localhost 行，正在修复..."
+    local tmp="/tmp/hosts.$$"
+    grep -v '^[[:space:]]*::1.*localhost' /etc/hosts > "$tmp"
+    if cp "$tmp" /etc/hosts 2>/dev/null; then
+      info "  /etc/hosts 已修复（移除 ::1 localhost）"
+    else
+      warn "  /etc/hosts 只读，无法自动修改"
+      warn "  请手动执行: sed -i '/^::1.*localhost/d' /etc/hosts"
+      warn "  然后重启 cloudflared"
+    fi
+    rm -f "$tmp"
   fi
 }
 
@@ -529,14 +545,10 @@ cat > "$SB_DIR/sb.json" << SBEOF
       "tag": "vless-ws-in",
       "listen": "127.0.0.1",
       "listen_port": $SB_PORT,
-      "sniff": true,
-      "sniff_override_destination": true,
-      "protocol": "vless",
-      "udp": true,
+      "type": "vless",
       "users": [
         {
-          "uuid": "$UUID",
-          "flow": "xtls-rprx-vision"
+          "uuid": "$UUID"
         }
       ],
       "transport": {
@@ -555,8 +567,7 @@ if [ "$USE_GRPC" = "y" ] || [ "$USE_GRPC" = "Y" ]; then
       "tag": "vless-grpc-in",
       "listen": "127.0.0.1",
       "listen_port": 8002,
-      "protocol": "vless",
-      "udp": true,
+      "type": "vless",
       "users": [
         { "uuid": "$UUID" }
       ],
@@ -578,7 +589,8 @@ cat >> "$SB_DIR/sb.json" << SBEOF2
   "dns": {
     "servers": [
       { "tag": "doh", "address": "https://1.1.1.1/dns-query" }
-    ]
+    ],
+    "strategy": "prefer_ipv4"
   },
   "route": {
     "rules": [
@@ -621,6 +633,7 @@ After=network.target
 
 [Service]
 Type=simple
+Environment=ENABLE_DEPRECATED_LEGACY_DNS_SERVERS=true
 ExecStart=/usr/local/bin/sing-box run -c $SB_DIR/sb.json
 Restart=always
 RestartSec=3
@@ -668,6 +681,14 @@ if [ "$USE_SYSTEMD" -eq 1 ]; then
   sleep 3
   systemctl is-active --quiet sing-box-vless.service && info "sing-box systemd 运行中" || warn "sing-box systemd 启动异常"
   systemctl is-active --quiet cloudflared-tunnel.service && info "cloudflared systemd 运行中" || warn "cloudflared systemd 启动异常"
+
+  fix_hosts
+
+  sleep 2
+  if journalctl -u cloudflared-tunnel --no-pager -n 10 2>/dev/null | grep -q "connection refused"; then
+    warn "cloudflared 连接 sing-box 被拒绝！"
+    warn "请手动: sed -i '/^::1.*localhost/d' /etc/hosts && systemctl restart cloudflared-tunnel"
+  fi
 else
   info "systemd 不可用，使用 nohup 后台启动"
 
@@ -686,6 +707,18 @@ else
     info "cloudflared 已启动 (PID: $(pgrep -f cloudflared | head -1))"
   else
     warn "cloudflared 启动异常，日志: /tmp/cloudflared-tunnel.log"
+  fi
+
+  # 修复 /etc/hosts：cloudflared 优先解析 IPv6，sing-box 只监听 IPv4
+  fix_hosts
+
+  # 如果 /etc/hosts 不可写且修复未生效，检查 cloudflared 是否报 connection refused
+  sleep 2
+  if grep -q "connection refused" /tmp/cloudflared-tunnel.log 2>/dev/null; then
+    warn "cloudflared 连接 sing-box 被拒绝！"
+    warn "原因：/etc/hosts 中 ::1 localhost 导致 cloudflared 连 IPv6 而 sing-box 只监听 IPv4"
+    warn "请手动执行: sed -i '/^::1.*localhost/d' /etc/hosts"
+    warn "然后重启 cloudflared: kill -9 \$(pgrep cloudflared) && nohup /usr/local/bin/cloudflared tunnel run --token \$(cat /root/cf-tunnel.conf | grep CF_TOKEN | cut -d'\"' -f2) --protocol http2 > /tmp/cloudflared-tunnel.log 2>&1 &"
   fi
 fi
 
@@ -724,7 +757,7 @@ step "Step 9/10 — 生成 sub.txt"
 
 PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null || echo "未知")
 
-VLESS_URL="vless://${UUID}@${PREF_DOMAIN}:443?encryption=none&security=tls&type=ws&host=${PREF_DOMAIN}&path=${WS_PATH}&sni=${PREF_DOMAIN}&fp=chrome"
+VLESS_URL="vless://${UUID}@${PREF_DOMAIN}:443?encryption=none&security=tls&type=ws&host=${CF_HOST}&path=${WS_PATH}&sni=${CF_HOST}&fp=chrome"
 VLESS_LINK1="${VLESS_URL}#配置一-无分片"
 VLESS_LINK2="${VLESS_URL}#配置二-分片"
 
@@ -741,8 +774,8 @@ cat > "$SUB_FILE" << SUBEOF
   协议:  VLESS
   UUID:  $UUID
   传输:  WebSocket
-  Host:  $PREF_DOMAIN
-  SNI:   $PREF_DOMAIN
+  Host:  $CF_HOST
+  SNI:   $CF_HOST
   路径:  $WS_PATH
   TLS:   true
   指纹:  chrome
@@ -759,8 +792,8 @@ $VLESS_LINK1
   协议:  VLESS
   UUID:  $UUID
   传输:  WebSocket
-  Host:  $PREF_DOMAIN
-  SNI:   $PREF_DOMAIN
+  Host:  $CF_HOST
+  SNI:   $CF_HOST
   路径:  $WS_PATH
   TLS:   true
   指纹:  chrome

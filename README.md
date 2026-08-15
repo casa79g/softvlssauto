@@ -8,12 +8,14 @@
 ## 架构
 
 ```
-V2RayN/Karing
-  → CF 边缘（你的 CF 域名）
-    → cloudflared tunnel
-      → localhost:8001
-        → sing-box (VLESS + WebSocket)
+V2RayN/Karing (地址=优选域名, Host/SNI=CF隧道域名)
+  → CF 边缘（优选域名 IP）
+    → cloudflared tunnel (ingress: CF隧道域名 → http://127.0.0.1:8001)
+      → sing-box (VLESS + WebSocket, 监听 127.0.0.1:8001)
 ```
+
+> ⚠️ CF 面板 ingress 中 service 字段请用 `http://127.0.0.1:8001` 而非 `http://localhost:8001`，
+> 避免 cloudflared 解析到 IPv6 `::1` 导致 connection refused。
 
 ## 安装
 
@@ -129,10 +131,15 @@ systemctl stop sing-box-vless cloudflared-tunnel
 
 ## 关键说明
 
-### 地址/Host/SNI 统一域名
+### 地址/Host/SNI 的对应关系
 
-只输入一个优选域名（如 `cf.godns.cc`），地址、Host、SNI 全部用同一域名，
-无需关心多个域名的对应关系。换域名只需运行 `gen_links.sh` 即可。
+| 字段 | 值 | 说明 |
+|------|-----|------|
+| **地址** | 优选域名（如 `cf.godns.cc`） | 用于实际 TCP 连接的入口 |
+| **Host** | CF 隧道域名（如 `arnegowl.zizibeef.kdns.fr`） | WS HTTP 请求的 Host 头，sing-box 以此匹配 |
+| **SNI** | CF 隧道域名（同 Host） | TLS 握手时发送的服务器名称 |
+
+> ⚠️ 地址 ≠ Host/SNI！地址是优选域名，Host/SNI 是 CF 隧道域名，两者不能混用。
 
 ### 两条链接的区别
 
@@ -155,3 +162,55 @@ Token 写入 `/root/cf-tunnel.conf`（权限 600），不在日志中打印。
 | `/root/cf-tunnel.conf` | cloudflared 配置（Token 在此） |
 | `/root/sub.txt` | 节点分享链接 |
 | `/root/softvlssauto/` | 脚本文件目录 |
+
+---
+
+## 常见问题
+
+### 1. 部署后 V2RayN 显示"connection refused"或"TLS handshake failed"
+
+**原因**：`/etc/hosts` 中 `localhost` 同时解析到 IPv6 `::1` 和 IPv4 `127.0.0.1`，
+cloudflared（Go 实现）优先连接 IPv6 `::1:8001`，但 sing-box 只监听 IPv4 `127.0.0.1:8001`。
+
+**修复**：
+```bash
+# 检查日志
+grep "connection refused" /tmp/cloudflared-tunnel.log
+
+# 修复 /etc/hosts
+sed -i '/^::1.*localhost/d' /etc/hosts
+
+# 重启 cloudflared
+kill -9 $(pgrep cloudflared)
+nohup /usr/local/bin/cloudflared tunnel run \
+  --token $(cat /root/cf-tunnel.conf | grep CF_TOKEN | cut -d'"' -f2) \
+  --protocol http2 > /tmp/cloudflared-tunnel.log 2>&1 &
+```
+
+> 脚本 v1.9+ 会在部署时自动检测并修复此问题。
+
+### 2. 容器重启后服务不自动启动
+
+容器环境（如阿里云 ECI）通常没有 systemd，cloudflared 和 sing-box 不会自动启动。
+需要在容器启动时手动运行：
+```bash
+bash /root/softvlssauto/install.sh
+```
+
+### 3. 直连 CF 隧道域名不通，换优选域名就通
+
+**原因**：国内网络到 CF 边缘经过某些节点时，CF 隧道域名可能被干扰或限流。
+使用 CF 优选域名（如 `cf.godns.cc`）绕开即可。
+
+在 V2RayN 中，将节点的**地址**改为优选域名，**Host/SNI** 保持 CF 隧道域名不变。
+
+### 4. IPv4/IPv6 容器区别
+
+| 容器类型 | /etc/hosts | 行为 | 需要修复？ |
+|---------|-----------|------|-----------|
+| IPv4-only | 仅 `127.0.0.1 localhost` | 正常工作 | ❌ |
+| 双栈 (IPv4+IPv6) | 同时有 `127.0.0.1` 和 `::1` | cloudflared 连 IPv6 失败 | ✅ 需删 `::1` 行 |
+| IPv6-only | 仅 `::1 localhost` | 需 sing-box 监听 IPv6 | ⚠️ 罕见，需手动处理 |
+
+> v1.9 脚本会自动检测双栈容器并删除 `::1 localhost` 行。IPv6-only 容器罕见，
+> 如遇请在 CF 面板 ingress 中将 `http://localhost:8001` 改为 `http://[::1]:8001`。
