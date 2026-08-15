@@ -1,8 +1,9 @@
 #!/bin/bash
 # ============================================================
-# CF Tunnel + VLESS 自动部署脚本 v1.1
+# CF Tunnel + VLESS 自动部署脚本 v1.2
 # 网络学习节点部署工具
 # 用法: bash install.sh
+# 无交互: export CF_TOKEN=... CF_HOST=... && bash install.sh
 # ============================================================
 set -euo pipefail
 
@@ -21,19 +22,16 @@ step()  { echo -e "\n${BOLD}━━━━━━━━━━━━━━━━━�
 # ── 全局变量 ──
 TUNNEL_NAME=""; CF_TOKEN=""; CF_HOST=""; SB_PORT=""; WS_PATH=""; UUID=""
 PREF_DOMAIN=""; USE_GRPC="n"
+NON_INTERACTIVE=0
 ARCH=$(uname -m)
 NOW=$(date +%Y-%m-%d_%H%M%S)
 SB_DIR="/etc/sing-box"
 SUB_FILE="/root/sub.txt"
 
-print_banner() {
-cat << 'EOF'
-╔══════════════════════════════════════════════════════════════╗
-║        CF Tunnel + VLESS  自动部署脚本 v1.1                  ║
-║        网络学习节点部署工具                                  ║
-╚══════════════════════════════════════════════════════════════╝
-EOF
-}
+# ── 检测是否无交互模式（所有关键参数已通过环境变量提供）──
+if [ -n "${CF_TOKEN:-}" ] && [ -n "${CF_HOST:-}" ]; then
+  NON_INTERACTIVE=1
+fi
 
 # ================================================================
 # Step 1 — 系统检测
@@ -72,31 +70,105 @@ detect_sys
 install_deps
 
 # ================================================================
-# Step 2 — 端口扫描
+# Step 2 — 端口扫描 + 自动释放
 # ================================================================
 step "Step 2/10 — 端口扫描"
 
 scan_port() {
   if ss -tlnp "sport = :$1" >/dev/null 2>&1; then
-    return 0  # occupied
+    return 0
   else
-    return 1  # free
+    return 1
+  fi
+}
+
+# 获取占用端口的进程信息
+get_port_info() {
+  local port="$1"
+  ss -tlnp "sport = :$port" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1
+}
+
+get_port_cmd() {
+  local pid="$1"
+  cat /proc/"$pid"/cmdline 2>/dev/null | tr '\0' ' ' | sed 's/ $//' || echo "unknown"
+}
+
+# 自动释放端口上的进程
+kill_port_process() {
+  local port="$1"
+  local pid
+  pid=$(get_port_info "$port")
+
+  if [ -z "$pid" ]; then
+    return 0  # 已经空闲
+  fi
+
+  local cmd
+  cmd=$(get_port_cmd "$pid")
+
+  # 如果是我们的服务，先用 systemd 停
+  if echo "$cmd" | grep -q "sing-box"; then
+    if systemctl is-active --quiet sing-box-vless 2>/dev/null; then
+      info "检测到 sing-box-vless 服务占用 $port 端口，正在停止..."
+      systemctl stop sing-box-vless.service 2>/dev/null || true
+      sleep 1
+    fi
+  elif echo "$cmd" | grep -q "cloudflared"; then
+    if systemctl is-active --quiet cloudflared-tunnel 2>/dev/null; then
+      info "检测到 cloudflared-tunnel 服务占用 $port 端口，正在停止..."
+      systemctl stop cloudflared-tunnel.service 2>/dev/null || true
+      sleep 1
+    fi
+  fi
+
+  # 再次检查
+  if ! scan_port "$port"; then
+    info "端口 $port 已释放"
+    return 0
+  fi
+
+  # systemd 没停掉，直接 kill
+  pid=$(get_port_info "$port")
+  if [ -n "$pid" ]; then
+    local cmd2
+    cmd2=$(get_port_cmd "$pid")
+    info "正在 kill 端口 $port 上的进程 (PID: $pid, 命令: ${cmd2:0:60})..."
+    kill -9 "$pid" 2>/dev/null || true
+    sleep 1
+  fi
+
+  # 最终验证
+  if scan_port "$port"; then
+    return 1  # 仍然占用
+  else
+    info "端口 $port 已释放"
+    return 0
   fi
 }
 
 scan_all_ports() {
   printf "  ${GREEN}[INFO]${NC} 正在扫描常用端口...\n\n"
   printf "  %s┌──────────┬────────┬──────────────────────┐%s\n" "${BOLD}" "${NC}"
-  printf "  %s│  端口    │ 状态   │ 用途建议              │%s\n" "${BOLD}" "${NC}"
+  printf "  %s│  端口    │ 状态   │ 占用进程            │%s\n" "${BOLD}" "${NC}"
   printf "  %s├──────────┼────────┼──────────────────────┤%s\n" "${BOLD}" "${NC}"
 
   for PORT in 80 443 8001 8002 8080 8443 3000; do
     if scan_port "$PORT"; then
-      STATUS="${RED}已占用${NC}"
+      local pid cmd_info
+      pid=$(get_port_info "$PORT")
+      if [ -n "$pid" ]; then
+        cmd_info=$(get_port_cmd "$pid" | sed 's/ /_/g' | cut -c1-20)
+        STATUS="${RED}已占用${NC}"
+        EXTRA="PID:$pid ${cmd_info:0:18}"
+      else
+        STATUS="${RED}已占用${NC}"
+        EXTRA=""
+      fi
     else
       STATUS="${GREEN}空闲${NC}"
+      EXTRA=""
     fi
-    printf "  %s│ %6d │ %-6s │ %-20s │%s\n" "${BOLD}" "$PORT" "$STATUS" "${NC}" "${NC}"
+    printf "  %s│ %6d │ %-6s │ %-20s │%s\n" "${BOLD}" "$PORT" "$STATUS" "${EXTRA}" "${NC}"
   done
 
   printf "  %s└──────────┴────────┴──────────────────────┘%s\n" "${BOLD}" "${NC}"
@@ -113,14 +185,72 @@ done
 
 scan_all_ports
 
-# 用户选择监听端口
+# 自动释放被占用的端口
 echo ""
-read -rp "  sing-box 监听端口（推荐 ${CYAN}${SUGGEST_PORT}${NC}，回车使用默认）: ["$SUGGEST_PORT"]" SB_PORT
-SB_PORT="${SB_PORT:-$SUGGEST_PORT}"
+if [ "$NON_INTERACTIVE" -eq 1 ]; then
+  # 无交互模式：自动释放推荐端口
+  info "无交互模式：自动释放推荐端口 $SUGGEST_PORT ..."
+  if scan_port "$SUGGEST_PORT"; then
+    kill_port_process "$SUGGEST_PORT" || \
+      warn "端口 $SUGGEST_PORT 释放失败，尝试备选端口..."
+    if scan_port "$SUGGEST_PORT"; then
+      # 尝试备选端口
+      for alt_port in 8080 8443 3000; do
+        if ! scan_port "$alt_port"; then
+          SUGGEST_PORT="$alt_port"
+          break
+        fi
+        kill_port_process "$alt_port" 2>/dev/null
+        if ! scan_port "$alt_port"; then
+          SUGGEST_PORT="$alt_port"
+          break
+        fi
+      done
+      info "切换到端口 $SUGGEST_PORT"
+    fi
+  fi
+  SB_PORT="$SUGGEST_PORT"
+else
+  # 交互模式
+  read -rp "  sing-box 监听端口（推荐 ${CYAN}${SUGGEST_PORT}${NC}，回车使用默认）: ["$SUGGEST_PORT"]" SB_PORT
+  SB_PORT="${SB_PORT:-$SUGGEST_PORT}"
 
-# 验证端口
-if scan_port "$SB_PORT"; then
-  error "端口 $SB_PORT 已被占用，请释放后重试或换其他端口"
+  if scan_port "$SB_PORT"; then
+    echo -e "  ${YELLOW}[INFO]端口 $SB_PORT 被占用，尝试自动释放${NC}"
+    if kill_port_process "$SB_PORT"; then
+      info "端口 $SB_PORT 已释放"
+    else
+      warn "端口 $SB_PORT 释放失败"
+      # 推荐备选
+      for alt_port in 8080 8443 3000 9001 9002; do
+        if ! scan_port "$alt_port"; then
+          read -rp "  备选端口 $alt_port 空闲，是否使用？[Y/n]: " USE_ALT
+          if [ "${USE_ALT:-Y}" = "n" ]; then
+            continue
+          else
+            SB_PORT="$alt_port"
+            break
+          fi
+        else
+          info "备选端口 $alt_port 也被占用，尝试释放..."
+          kill_port_process "$alt_port" 2>/dev/null
+          if ! scan_port "$alt_port"; then
+            read -rp "  备选端口 $alt_port 已释放，是否使用？[Y/n]: " USE_ALT
+            if [ "${USE_ALT:-Y}" = "n" ]; then
+              continue
+            else
+              SB_PORT="$alt_port"
+              break
+            fi
+          fi
+        fi
+      done
+      # 如果所有备选都失败
+      if scan_port "$SB_PORT"; then
+        error "所有推荐端口均无法使用，请手动释放端口后重试"
+      fi
+    fi
+  fi
 fi
 
 info "sing-box 将监听端口: $SB_PORT"
@@ -185,7 +315,6 @@ if [ -f /tmp/cf-deb/usr/bin/cloudflared ] && file /tmp/cf-deb/usr/bin/cloudflare
   cp /tmp/cf-deb/usr/bin/cloudflared /usr/local/bin/cloudflared
   chmod +x /usr/local/bin/cloudflared
 else
-  # 回退：直接下载裸二进制
   for try_url in "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}" \
                  "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64"; do
     curl -sL -o /usr/local/bin/cloudflared "$try_url" 2>/dev/null
@@ -206,60 +335,103 @@ info "cloudflared 下载完成: $(cloudflared --version 2>&1 | head -1)"
 # ================================================================
 step "Step 4/10 — 参数配置"
 
-read -rp "  1. 隧道名称（CF面板中的名字）: [arnegowl]" TUNNEL_NAME
+# --- TUNNEL_NAME ---
+if [ -n "${TUNNEL_NAME:-}" ]; then
+  info "已检测到环境变量 TUNNEL_NAME: $TUNNEL_NAME"
+elif [ "$NON_INTERACTIVE" -eq 1 ]; then
+  TUNNEL_NAME="network-learning-node"
+else
+  read -rp "  1. 隧道名称（CF面板中的名字）: [arnegowl]" TUNNEL_NAME
+  TUNNEL_NAME="${TUNNEL_NAME:-arnegowl}"
+fi
 TUNNEL_NAME="${TUNNEL_NAME:-arnegowl}"
 
-# 优先使用环境变量 CF_TOKEN，否则手动输入（单次，不回显）
+# --- CF_TOKEN ---
 if [ -n "${CF_TOKEN:-}" ]; then
-  info "已检测到环境变量 CF_TOKEN，直接使用"
+  info "已检测到环境变量 CF_TOKEN"
+elif [ "$NON_INTERACTIVE" -eq 1 ]; then
+  error "无交互模式需要设置 CF_TOKEN 环境变量"
 else
   echo ""
   warn "提示：Token 较长（约200字符），请整段复制后粘贴，不要手动输入"
   echo -n "  2. 隧道 Token（eyJh... 开头，不回显，粘贴后回车）: "
   read -r CF_TOKEN
-  if [ -z "$CF_TOKEN" ]; then
-    error "Token 不能为空"
-  fi
 fi
 [ -z "$CF_TOKEN" ] && error "Token 不能为空"
 
-read -rp "  3. CF 隧道域名（CF面板 ingress 的 hostname）: " CF_HOST
+# --- CF_HOST ---
+if [ -n "${CF_HOST:-}" ]; then
+  info "已检测到环境变量 CF_HOST: $CF_HOST"
+elif [ "$NON_INTERACTIVE" -eq 1 ]; then
+  error "无交互模式需要设置 CF_HOST 环境变量"
+else
+  read -rp "  3. CF 隧道域名（CF面板 ingress 的 hostname）: " CF_HOST
+fi
 [ -z "$CF_HOST" ] && error "CF 域名不能为空"
 
-# 自动检测端口（若用户没在 step 2 输入则自动设8001）
-SB_PORT="${SB_PORT:-8001}"
+# --- SB_PORT ---
+SB_PORT="${SB_PORT:-$SUGGEST_PORT}"
 
-# WebSocket 路径
-RANDOM_PATH="/proxy-$(openssl rand -hex 3 2>/dev/null || echo $((RANDOM*RANDOM % 99999)))"
-read -rp "  4. WebSocket 路径（回车自动生成 $CYAN$RANDOM_PATH${NC}）: ["$RANDOM_PATH"]" WS_PATH
-WS_PATH="${WS_PATH:-$RANDOM_PATH}"
+# --- WS_PATH ---
+if [ -n "${WS_PATH:-}" ]; then
+  info "已检测到环境变量 WS_PATH: $WS_PATH"
+elif [ "$NON_INTERACTIVE" -eq 1 ]; then
+  WS_PATH="/proxy-$(openssl rand -hex 3 2>/dev/null || echo $((RANDOM*RANDOM % 99999)))"
+  info "自动生成 WS_PATH: $WS_PATH"
+else
+  RANDOM_PATH="/proxy-$(openssl rand -hex 3 2>/dev/null || echo $((RANDOM*RANDOM % 99999)))"
+  read -rp "  4. WebSocket 路径（回车自动生成 $CYAN$RANDOM_PATH${NC}）: ["$RANDOM_PATH"]" WS_PATH
+  WS_PATH="${WS_PATH:-$RANDOM_PATH}"
+fi
 
-# UUID
-AUTO_UUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "$(head -c 8 /dev/urandom | md5sum | cut -d' ' -f1)")
-read -rp "  5. UUID（回车自动生成）: ["$AUTO_UUID"]" UUID
-UUID="${UUID:-$AUTO_UUID}"
+# --- UUID ---
+if [ -n "${UUID:-}" ]; then
+  info "已检测到环境变量 UUID"
+elif [ "$NON_INTERACTIVE" -eq 1 ]; then
+  UUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "$(head -c 8 /dev/urandom | md5sum | cut -d' ' -f1)")
+  info "自动生成 UUID"
+else
+  AUTO_UUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "$(head -c 8 /dev/urandom | md5sum | cut -d' ' -f1)")
+  read -rp "  5. UUID（回车自动生成）: ["$AUTO_UUID"]" UUID
+  UUID="${UUID:-$AUTO_UUID}"
+fi
 
-# CF优选域名（地址/Host/SNI 统一用此域名）
-read -rp "  6. CF优选域名（地址/Host/SNI均使用，默认 ${CYAN}cf.godns.cc${NC}）: ["cf.godns.cc"]" PREF_DOMAIN
-PREF_DOMAIN="${PREF_DOMAIN:-cf.godns.cc}"
+# --- PREF_DOMAIN ---
+if [ -n "${PREF_DOMAIN:-}" ]; then
+  info "已检测到环境变量 PREF_DOMAIN: $PREF_DOMAIN"
+elif [ "$NON_INTERACTIVE" -eq 1 ]; then
+  PREF_DOMAIN="cf.godns.cc"
+else
+  read -rp "  6. CF优选域名（地址/Host/SNI均使用，默认 ${CYAN}cf.godns.cc${NC}）: ["cf.godns.cc"]" PREF_DOMAIN
+  PREF_DOMAIN="${PREF_DOMAIN:-cf.godns.cc}"
+fi
 
-# gRPC
-read -rp "  7. 是否启用 gRPC 入口？${YELLOW}(推荐 N，VLESS 已够用)${NC} [N]: " USE_GRPC
-USE_GRPC="${USE_GRPC:-n}"
+# --- USE_GRPC ---
+if [ -n "${USE_GRPC:-}" ]; then
+  info "已检测到环境变量 USE_GRPC: $USE_GRPC"
+elif [ "$NON_INTERACTIVE" -eq 1 ]; then
+  USE_GRPC="n"
+else
+  read -rp "  7. 是否启用 gRPC 入口？${YELLOW}(推荐 N，VLESS 已够用)${NC} [N]: " USE_GRPC
+  USE_GRPC="${USE_GRPC:-n}"
+fi
 
-echo ""
-echo "  ${BOLD}配置确认:${NC}"
-echo "  ┌──────────────┬──────────────────────────────┐"
-echo "  │ 隧道名称     │ $TUNNEL_NAME"
-echo "  │ CF 域名      │ $CF_HOST"
-echo "  │ 监听端口     │ $SB_PORT"
-echo "  │ WS 路径      │ $WS_PATH"
-echo "  │ UUID         │ $UUID"
-echo "  │ CF优选域名 │ $PREF_DOMAIN"
-echo "  │ gRPC         │ $USE_GRPC"
-echo "  └──────────────┴──────────────────────────────┘"
-read -rp "  确认开始部署？[Y/n]: " CONFIRM
-[ "${CONFIRM:-Y}" = "n" ] && error "部署已取消"
+# --- 打印配置确认 ---
+if [ "$NON_INTERACTIVE" -eq 0 ]; then
+  echo ""
+  echo "  ${BOLD}配置确认:${NC}"
+  echo "  ┌──────────────┬──────────────────────────────┐"
+  echo "  │ 隧道名称     │ $TUNNEL_NAME"
+  echo "  │ CF 域名      │ $CF_HOST"
+  echo "  │ 监听端口     │ $SB_PORT"
+  echo "  │ WS 路径      │ $WS_PATH"
+  echo "  │ UUID         │ $UUID"
+  echo "  │ CF优选域名 │ $PREF_DOMAIN"
+  echo "  │ gRPC         │ $USE_GRPC"
+  echo "  └──────────────┴──────────────────────────────┘"
+  read -rp "  确认开始部署？[Y/n]: " CONFIRM
+  [ "${CONFIRM:-Y}" = "n" ] && error "部署已取消"
+fi
 
 # ================================================================
 # Step 5 — 生成配置
@@ -268,7 +440,6 @@ step "Step 5/10 — 生成 sing-box 配置"
 
 mkdir -p "$SB_DIR"
 
-# 生成 sing-box 配置
 cat > "$SB_DIR/sb.json" << SBEOF
 {
   "log": { "level": "error" },
@@ -295,9 +466,7 @@ cat > "$SB_DIR/sb.json" << SBEOF
     }
 SBEOF
 
-# 如果启用 gRPC
 if [ "$USE_GRPC" = "y" ] || [ "$USE_GRPC" = "Y" ]; then
-  # 检查 sing-box 是否支持 grpc
   if sing-box version 2>&1 | grep -qi grpc; then
     cat >> "$SB_DIR/sb.json" << GRPEOF
     ,
@@ -318,7 +487,7 @@ if [ "$USE_GRPC" = "y" ] || [ "$USE_GRPC" = "Y" ]; then
 GRPEOF
     info "已添加 gRPC 入口 (8002)"
   else
-    warn "sing-box 不支持 gRPC（未编译 with_grpc 标签），跳过"
+    warn "sing-box 不支持 gRPC，跳过"
     USE_GRPC="n"
   fi
 fi
@@ -345,7 +514,6 @@ SBEOF2
 
 info "sing-box 配置已写入 $SB_DIR/sb.json"
 
-# 写入 cloudflared 配置
 cat > /root/cf-tunnel.conf << CFEOF
 CF_TOKEN="$CF_TOKEN"
 TUNNEL_NAME="$TUNNEL_NAME"
@@ -362,7 +530,6 @@ info "cloudflared 配置已写入 /root/cf-tunnel.conf（权限 600）"
 # ================================================================
 step "Step 6/10 — 写入 systemd 服务"
 
-# sing-box 服务
 cat > /etc/systemd/system/sing-box-vless.service << SVC_EOF
 [Unit]
 Description=Sing-box VLESS for CF Tunnel
@@ -380,7 +547,6 @@ StandardError=journal
 WantedBy=multi-user.target
 SVC_EOF
 
-# cloudflared 服务
 cat > /etc/systemd/system/cloudflared-tunnel.service << SVC_EOF
 [Unit]
 Description=Cloudflare Tunnel for VLESS
@@ -410,15 +576,14 @@ step "Step 7/10 — 启动服务"
 systemctl enable sing-box-vless.service
 systemctl start sing-box-vless.service
 sleep 2
-info "sing-box 启动完成 (PID: $(pgrep -f 'sing-box' | head -1))"
+info "sing-box 启动完成 (PID: $(pgrep -f 'sing-box' | head -1 || echo 'N/A'))"
 
 systemctl enable cloudflared-tunnel.service
 systemctl start cloudflared-tunnel.service
 sleep 3
-info "cloudflared 启动完成 (PID: $(pgrep -f cloudflared | head -1))"
+info "cloudflared 启动完成 (PID: $(pgrep -f cloudflared | head -1 || echo 'N/A'))"
 
-# 检查 CF 连接
-CF_CONN=$(journalctl -u cloudflared-tunnel --no-pager -n 20 2>/dev/null | grep -c "connected\|quic\|http2\|Connected" || echo 0)
+CF_CONN=$(journalctl -u cloudflared-tunnel --no-pager -n 20 2>/dev/null | grep -ci "connected\|quic\|http2" || echo 0)
 info "cloudflared 连接状态: $CF_CONN 条活动连接"
 
 # ================================================================
@@ -426,12 +591,10 @@ info "cloudflared 连接状态: $CF_CONN 条活动连接"
 # ================================================================
 step "Step 8/10 — 连通性测试"
 
-# 本地测试
 info "测试本地 sing-box 端口 $SB_PORT ..."
 LOCAL_HTTP=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://localhost:$SB_PORT/" 2>/dev/null || echo "FAIL")
 info "  HTTP 请求: $LOCAL_HTTP (正常返回404)"
 
-# CF 隧道测试
 info "测试 CF 隧道: https://$CF_HOST$WS_PATH ..."
 CF_HTTP=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --http1.1 "https://$CF_HOST/" 2>/dev/null || echo "FAIL")
 CF_WS=$(curl -s --http1.1 --max-time 10 -H "Upgrade: websocket" -H "Connection: Upgrade" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" -H "Sec-WebSocket-Version: 13" "https://$CF_HOST$WS_PATH" -o /dev/null -w '%{http_code}' 2>/dev/null || echo "FAIL")
@@ -451,12 +614,10 @@ step "Step 9/10 — 生成 sub.txt"
 
 PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null || echo "未知")
 
-# 生成两条 vless 链接（URL 相同，标签不同区分用途）
 VLESS_URL="vless://${UUID}@${PREF_DOMAIN}:443?encryption=none&security=tls&type=ws&host=${PREF_DOMAIN}&path=${WS_PATH}&sni=${PREF_DOMAIN}&fp=chrome"
 VLESS_LINK1="${VLESS_URL}#配置一-无分片"
 VLESS_LINK2="${VLESS_URL}#配置二-分片"
 
-# 生成 sub.txt
 cat > "$SUB_FILE" << SUBEOF
 ========================================
   网络学习节点 - 自动生成 $(date '+%Y-%m-%d %H:%M:%S')
@@ -510,7 +671,6 @@ SUBEOF
 chmod 600 "$SUB_FILE"
 info "已写入 $SUB_FILE"
 
-# 打印 sub.txt
 echo ""
 cat "$SUB_FILE"
 
