@@ -1,11 +1,11 @@
 #!/bin/bash
 # ============================================================
-# CF Tunnel + VLESS 自动部署脚本 v1.6
+# CF Tunnel + VLESS 自动部署脚本 v1.7
 # 网络学习节点部署工具
 # 用法: bash install.sh
 # 无交互: export CF_TOKEN=... CF_HOST=... && bash install.sh
 # ============================================================
-set -euo pipefail
+set -uo pipefail
 
 # ── 颜色 ──
 GREEN='\033[0;32m'; RED='\033[0;31m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'
@@ -31,9 +31,9 @@ NOW=$(date +%Y-%m-%d_%H%M%S)
 SB_DIR="/etc/sing-box"
 SUB_FILE="/root/sub.txt"
 
-# ── 检测 systemd 是否可用 ──
+# ── 检测 systemd 是否真为 PID 1（容器内 systemctl 可能是包装脚本）──
 USE_SYSTEMD=0
-if [ -d /run/systemd/system ] || systemctl is-system-running >/dev/null 2>&1; then
+if [ "$(cat /proc/1/comm 2>/dev/null)" = "systemd" ]; then
   USE_SYSTEMD=1
 fi
 
@@ -628,7 +628,10 @@ info "cloudflared 配置已写入 /root/cf-tunnel.conf（权限 600）"
 # ================================================================
 step "Step 6/10 — 写入 systemd 服务"
 
-cat > /etc/systemd/system/sing-box-vless.service << SVC_EOF
+if [ "$USE_SYSTEMD" -eq 1 ]; then
+  mkdir -p /etc/systemd/system
+
+  cat > /etc/systemd/system/sing-box-vless.service << SVC_EOF
 [Unit]
 Description=Sing-box VLESS for CF Tunnel
 After=network.target
@@ -664,7 +667,10 @@ WantedBy=multi-user.target
 SVC_EOF
 
 systemctl daemon-reload
-info "systemd 服务已写入"
+  info "systemd 服务已写入"
+else
+  info "系统未检测到 systemd（容器环境），跳过服务文件，将使用 nohup 后台运行"
+fi
 
 # ================================================================
 # Step 7 — 启动服务
