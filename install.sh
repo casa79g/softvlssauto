@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# CF Tunnel + VLESS 自动部署脚本 v2.5
+# CF Tunnel + VLESS 自动部署脚本 v3.0
 # VLESS Tunnel Deploy Toolkit部署工具
 # 守护架构：PM2（主） + systemd（容器兜底） + cron（可选）
 # ============================================================
@@ -51,13 +51,7 @@ fi
 
 TUNNEL_NAME=""; CF_TOKEN=""; CF_HOST=""; SB_PORT=""; WS_PATH=""; UUID=""
 PREF_DOMAIN=""; USE_GRPC="n"; NON_INTERACTIVE=0
-BEACON_URL="${BEACON_URL:-http://47.84.122.196:8900/beacon}"
-NO_BEACON="${NO_BEACON:-0}"
 if [ -n "${CF_TOKEN:-}" ] && [ -n "${CF_HOST:-}" ]; then NON_INTERACTIVE=1; fi
-# 解析 --no-beacon 参数
-for _arg in "$@"; do
-  [ "$_arg" = "--no-beacon" ] && NO_BEACON=1
-done
 ARCH=$(uname -m); NOW=$(date +%Y-%m-%d_%H%M%S)
 SB_DIR="/etc/sing-box"; SUB_FILE="/root/sub.txt"
 USE_SYSTEMD=0
@@ -515,7 +509,7 @@ VLESS_URL="vless://${UUID}@${PREF_DOMAIN}:443?encryption=none&security=tls&type=
 
 cat > "$SUB_FILE" << SUBEOF
 ========================================
-  VLESS Tunnel Deploy Toolkit v2.3
+  VLESS Tunnel Deploy Toolkit v3.0
   生成: $(date '+%Y-%m-%d %H:%M:%S')
   VPS:  $PUBLIC_IP | 隧道: $TUNNEL_NAME
 ========================================
@@ -565,7 +559,7 @@ step "Step 9/10 — 部署完成"
 
 cat << DONE
 ╔═══════════════════════════════════════════════════════════╗
-║                  部署成功！v2.5                           ║
+║                  部署成功！v3.0                           ║
 ╠═══════════════════════════════════════════════════════════╣
 ║                                                           ║
 ║   sing-box:  监听 $SB_PORT 端口 (127.0.0.1)            ║
@@ -597,17 +591,3 @@ echo ""
 echo "  ${YELLOW}注意：重启 VPS/容器后，系统会自动拉起（PM2 startup / systemd）。${NC}"
 echo "  ${YELLOW}如果 VPS 有 cron，可选用 30 分钟 cron 做额外兜底。${NC}"
 
-# ── 匿名部署追踪（Beacon） ──
-SCRIPT_VERSION="v2.5"
-if [ "$NO_BEACON" != "1" ]; then
-  (
-    curl -s --max-time 4 \
-      "${BEACON_URL}?v=${SCRIPT_VERSION}&a=$(uname -m 2>/dev/null || echo x)&o=$(uname -s 2>/dev/null || echo x)" \
-      -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" \
-      -H "Referer: https://github.com/" \
-      -o /dev/null 2>&1 &
-  ) &
-  info "匿名部署追踪已上报（如需关闭：--no-beacon）"
-else
-  info "已跳过匿名部署追踪（--no-beacon）"
-fi
