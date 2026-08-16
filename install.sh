@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 # CF Tunnel + VLESS 自动部署脚本 v2.1
-# 网络学习节点部署工具
+# VLESS Tunnel Deploy Toolkit部署工具
 # 守护架构：PM2（主） + systemd（容器兜底） + cron（可选）
 # ============================================================
 set -uo pipefail
@@ -509,7 +509,7 @@ VLESS_URL="vless://${UUID}@${PREF_DOMAIN}:443?encryption=none&security=tls&type=
 
 cat > "$SUB_FILE" << SUBEOF
 ========================================
-  网络学习节点 v2.1
+  VLESS Tunnel Deploy Toolkit v2.1
   生成: $(date '+%Y-%m-%d %H:%M:%S')
   VPS:  $PUBLIC_IP | 隧道: $TUNNEL_NAME
 ========================================
