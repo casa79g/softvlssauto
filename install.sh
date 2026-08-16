@@ -16,6 +16,39 @@ step()  { echo -e "\n${BOLD}━━━━━━━━━━━━━━━━━�
 
 [ "$(id -u)" -ne 0 ] && error "请使用 root 权限运行"
 
+# ================================================================
+# 目录自愈：修正 git clone 嵌套问题
+# 如果检测到 /root/softvlssauto/softvlssauto/ 这种多层嵌套，
+# 把内层文件合并到外层，然后删除多余层。
+# ================================================================
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+SCRIPT_BASENAME="$(basename "$SELF_DIR")"
+SELF_PARENT="$(dirname "$SELF_DIR")"
+
+if [ -n "$SELF_PARENT" ] && [ "$SELF_PARENT" != "/" ]; then
+  # 检测外层是否也有同名目录（说明我们被嵌在里面了）
+  OUTER_SCRIPT="${SELF_PARENT}/${SCRIPT_BASENAME}"
+  if [ -d "$SELF_DIR" ] && [ -f "${SELF_DIR}/${SCRIPT_BASENAME}.sh" ] && [ -d "${SELF_DIR}/${SCRIPT_BASENAME}" ]; then
+    warn "检测到嵌套目录结构，正在修复..."
+    for f in install.sh gen_links.sh query.sh sb-template.json uninstall.sh README.md; do
+      [ -f "${SELF_DIR}/${SCRIPT_BASENAME}/${f}" ] && cp "${SELF_DIR}/${SCRIPT_BASENAME}/${f}" "${SELF_DIR}/${f}" 2>/dev/null
+    done
+    rm -rf "${SELF_DIR}/${SCRIPT_BASENAME}"
+    info "嵌套目录已修正（展开至 ${SELF_DIR}/）"
+  fi
+
+  # 检测同一目录下是否还有同名的旧克隆副本
+  OLD_CLONE="${SELF_DIR}/softvlssauto"
+  if [ -d "$OLD_CLONE" ] && [ -f "${OLD_CLONE}/install.sh" ]; then
+    warn "检测到旧克隆副本，正在清理..."
+    for f in install.sh gen_links.sh query.sh sb-template.json uninstall.sh README.md; do
+      [ -f "${OLD_CLONE}/${f}" ] && cp "${OLD_CLONE}/${f}" "${SELF_DIR}/${f}" 2>/dev/null
+    done
+    rm -rf "$OLD_CLONE"
+    info "旧克隆副本已清理"
+  fi
+fi
+
 TUNNEL_NAME=""; CF_TOKEN=""; CF_HOST=""; SB_PORT=""; WS_PATH=""; UUID=""
 PREF_DOMAIN=""; USE_GRPC="n"; NON_INTERACTIVE=0
 if [ -n "${CF_TOKEN:-}" ] && [ -n "${CF_HOST:-}" ]; then NON_INTERACTIVE=1; fi
