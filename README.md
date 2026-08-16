@@ -1,6 +1,6 @@
 # CF Tunnel + VLESS 自动部署 v2.1
 
-基于 Cloudflare Tunnel + sing-box 的VLESS Tunnel方案，**无需开放公网端口**，零端口暴露。
+基于 Cloudflare Tunnel + sing-box 的网络学习方案，**无需开放公网端口**，零端口暴露。
 
 ## 🏗️ 守护架构（v2.1 核心变化）
 

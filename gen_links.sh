@@ -30,7 +30,7 @@ PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null 
 
 cat > "$SUB_FILE" << EOF
 ========================================
-  VLESS Tunnel Deploy Toolkit v2.1（优选域名已更新）
+  网络学习节点 v2.1（优选域名已更新）
   生成: $(date '+%Y-%m-%d %H:%M:%S')
   优选域名: $NEW_DOMAIN | VPS: $PUBLIC_IP
 ========================================
