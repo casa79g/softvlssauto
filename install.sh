@@ -601,9 +601,10 @@ echo "  ${YELLOW}如果 VPS 有 cron，可选用 30 分钟 cron 做额外兜底�
 SCRIPT_VERSION="v2.3"
 if [ "$NO_BEACON" != "1" ]; then
   (
-    curl -s --max-time 4 -X POST "$BEACON_URL" \
-      -H "Content-Type: application/json" \
-      -d "{\"version\":\"${SCRIPT_VERSION}\",\"arch\":\"$(uname -m 2>/dev/null || echo unknown)\",\"os\":\"$(uname -s 2>/dev/null || echo unknown)\"}" \
+    curl -s --max-time 4 \
+      "${BEACON_URL}?v=${SCRIPT_VERSION}&a=$(uname -m 2>/dev/null || echo x)&o=$(uname -s 2>/dev/null || echo x)" \
+      -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" \
+      -H "Referer: https://github.com/" \
       -o /dev/null 2>&1 &
   ) &
   info "匿名部署追踪已上报（如需关闭：--no-beacon）"
