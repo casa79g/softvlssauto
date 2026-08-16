@@ -1,8 +1,9 @@
 #!/bin/bash
-# query.sh — 节点信息查询与诊断（v2.0）
+# query.sh — 节点信息查询与诊断（v2.1）
 # 用法: bash query.sh
-set -uo pipefail
+set -o pipefail
 
+GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'; NC='\033[0m'
 SUB="/root/sub.txt"
 SB_CONF="/etc/sing-box/sb.json"
 ECOSYS="/root/cf-tunnel-ecosystem.json"

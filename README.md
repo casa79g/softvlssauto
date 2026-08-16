@@ -1,8 +1,8 @@
-# CF Tunnel + VLESS 自动部署 v2.0
+# CF Tunnel + VLESS 自动部署 v2.1
 
 基于 Cloudflare Tunnel + sing-box 的网络学习方案，**无需开放公网端口**，零端口暴露。
 
-## 🏗️ 守护架构（v2.0 核心变化）
+## 🏗️ 守护架构（v2.1 核心变化）
 
 ```
 主守护：PM2（Node.js 进程管理器）
@@ -69,7 +69,7 @@ bash install.sh
 
 ## 🔧 管理命令
 
-### PM2 方式（v2.0 默认）
+### PM2 方式（v2.1 默认）
 ```bash
 pm2 list                  # 查看所有进程状态
 pm2 logs                  # 实时查看日志

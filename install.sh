@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# CF Tunnel + VLESS 自动部署脚本 v2.0
+# CF Tunnel + VLESS 自动部署脚本 v2.1
 # 网络学习节点部署工具
 # 守护架构：PM2（主） + systemd（容器兜底） + cron（可选）
 # ============================================================
@@ -321,43 +321,60 @@ cat >> "$SB_DIR/sb.json" << SBEOF2
 }
 SBEOF2
 
-# PM2 ecosystem 配置
+# ── 写入 Cloudflare Token 到安全文件（chmod 600，仅 root 可读） ──
+cat > /root/cf-tunnel.conf << CFEOF
+token=$CF_TOKEN
+CFEOF
+chmod 600 /root/cf-tunnel.conf
+info "Token 已安全写入 /root/cf-tunnel.conf (chmod 600)"
+
+# ── 创建 PM2 启动脚本（避免 token 泄露到进程命令行） ──
+cat > /root/start-sing-box.sh << 'SBWEOF'
+#!/bin/bash
+exec /usr/local/bin/sing-box run -c /etc/sing-box/sb.json
+SBWEOF
+chmod +x /root/start-sing-box.sh
+
+cat > /root/start-cloudflared.sh << 'CFWEOF'
+#!/bin/bash
+CF_TOKEN="$(cat /root/cf-tunnel.conf | cut -d= -f2)"
+exec /usr/local/bin/cloudflared tunnel run --token "$CF_TOKEN" --protocol http2
+CFWEOF
+chmod +x /root/start-cloudflared.sh
+
+# ── PM2 ecosystem 配置 ──
 cat > /root/cf-tunnel-ecosystem.json << ECOSYS
 {
   "apps": [
     {
       "name": "sing-box-vless",
-      "script": "/usr/local/bin/sing-box",
-      "args": "run -c $SB_DIR/sb.json",
-      "interpreter": "bash",
+      "script": "/root/start-sing-box.sh",
       "cwd": "/",
       "log_file": "/tmp/sing-box-vless.log",
       "error_file": "/tmp/sing-box-vless.err.log",
       "out_file": "/tmp/sing-box-vless.out.log",
       "merge_logs": true,
       "max_restarts": 999,
-      "min_uptime": "10s",
-      "restart_delay": "3s"
+      "min_uptime": 10000,
+      "restart_delay": 3
     },
     {
       "name": "cloudflared-tunnel",
-      "script": "/usr/local/bin/cloudflared",
-      "args": "tunnel run --token $CF_TOKEN --protocol http2",
-      "interpreter": "bash",
+      "script": "/root/start-cloudflared.sh",
       "cwd": "/",
       "log_file": "/tmp/cloudflared-tunnel.log",
       "error_file": "/tmp/cloudflared-tunnel.err.log",
       "out_file": "/tmp/cloudflared-tunnel.out.log",
       "merge_logs": true,
       "max_restarts": 999,
-      "min_uptime": "15s",
-      "restart_delay": "5s"
+      "min_uptime": 15000,
+      "restart_delay": 5
     }
   ]
 }
 ECOSYS
 chmod 600 /root/cf-tunnel-ecosystem.json
-info "sing-box 配置 + PM2 ecosystem 已写入"
+info "sing-box 配置 + 启动脚本 + PM2 ecosystem 已写入"
 
 # ================================================================
 # Step 6 — 启动（PM2 优先 / systemd 兜底）
@@ -369,7 +386,7 @@ if command -v pm2 >/dev/null 2>&1 || command -v npx >/dev/null 2>&1; then
   HAS_PM2=1
 fi
 
-if [ "$HAS_PM2" -eq 1 ] || (command -v node >/dev/null 2>&1 && npm install -g pm2 --prefix /usr/local 2>/dev/null); then
+if [ "$HAS_PM2" -eq 1 ] || (command -v node >/dev/null 2>&1 && npm install -g pm2 2>/dev/null); then
   info "PM2 可用，使用 PM2 作为进程管理器"
 
   # 确保 pm2 在 PATH
@@ -425,7 +442,7 @@ Wants=sing-box-vless.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/cloudflared tunnel run --token $CF_TOKEN --protocol http2
+ExecStart=/root/start-cloudflared.sh
 Restart=always
 RestartSec=5
 
@@ -441,9 +458,9 @@ SVC_EOF
   sleep 3
 else
   info "PM2 和 systemd 均不可用，使用 nohup 后台运行"
-  nohup /usr/local/bin/sing-box run -c $SB_DIR/sb.json > /tmp/sing-box-vless.log 2>&1 &
+  nohup /root/start-sing-box.sh > /tmp/sing-box-vless.log 2>&1 &
   sleep 2
-  nohup /usr/local/bin/cloudflared tunnel run --token "$CF_TOKEN" --protocol http2 > /tmp/cloudflared-tunnel.log 2>&1 &
+  nohup /root/start-cloudflared.sh > /tmp/cloudflared-tunnel.log 2>&1 &
   sleep 3
 fi
 
@@ -492,7 +509,7 @@ VLESS_URL="vless://${UUID}@${PREF_DOMAIN}:443?encryption=none&security=tls&type=
 
 cat > "$SUB_FILE" << SUBEOF
 ========================================
-  网络学习节点 v2.0
+  网络学习节点 v2.1
   生成: $(date '+%Y-%m-%d %H:%M:%S')
   VPS:  $PUBLIC_IP | 隧道: $TUNNEL_NAME
 ========================================
@@ -542,7 +559,7 @@ step "Step 9/10 — 部署完成"
 
 cat << DONE
 ╔═══════════════════════════════════════════════════════════╗
-║                  部署成功！v2.0                           ║
+║                  部署成功！v2.1                           ║
 ╠═══════════════════════════════════════════════════════════╣
 ║                                                           ║
 ║   sing-box:  监听 $SB_PORT 端口 (127.0.0.1)            ║

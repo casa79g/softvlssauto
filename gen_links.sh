@@ -1,24 +1,27 @@
 #!/bin/bash
-# gen_links.sh — 切换 CF 优选域名（v2.0 适配）
+# gen_links.sh — 切换 CF 优选域名（v2.1 适配）
 # 用法: bash gen_links.sh <新优选域名>
 # 示例: bash gen_links.sh cf.godns.cc
-set -uo pipefail
+set -o pipefail
+
+error() { echo "ERROR: $1" >&2; exit 1; }
 
 [ $# -lt 1 ] && { echo "用法: bash gen_links.sh <新优选域名>"; echo "示例: bash gen_links.sh cf.godns.cc"; exit 1; }
 NEW_DOMAIN="$1"
 SUB_FILE="/root/sub.txt"
-
-# 从 ecosystem.json 读取配置
 ECOSYS="/root/cf-tunnel-ecosystem.json"
+
 [ -f "$ECOSYS" ] || error "未找到 $ECOSYS，请先运行 install.sh 部署"
+[ -f "$SUB_FILE" ] || error "未找到 $SUB_FILE，请先运行 install.sh 部署"
 
-CF_HOST=$(grep '"Host"' "$SUB_FILE" | head -1 | awk -F: '{print $2}' | tr -d ' ')
-WS_PATH=$(grep '"路径"' "$SUB_FILE" | awk '{print $NF}')
-UUID=$(grep '"UUID"' "$SUB_FILE" | awk '{print $NF}')
+# 从 sub.txt 读取配置（匹配实际格式 "  Key:  Value"）
+CF_HOST=$(grep "^  Host:" "$SUB_FILE" | head -1 | sed 's/^  Host: *//')
+WS_PATH=$(grep "^  路径:" "$SUB_FILE" | head -1 | sed 's/^  路径: *//')
+UUID=$(grep "^  UUID:" "$SUB_FILE" | head -1 | sed 's/^  UUID: *//')
 
-# 如果 sub.txt 格式不对，尝试直接从 ecosystem.json 读
+# 兜底：如果解析失败，尝试从 ecosystem.json 或生成新值
 [ -z "$UUID" ] && UUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || head -c 8 /dev/urandom | md5sum | cut -d' ' -f1)
-[ -z "$CF_HOST" ] && CF_HOST=$(curl -s ifconfig.me 2>/dev/null || echo "cf-tunnel.example.com")
+[ -z "$CF_HOST" ] && CF_HOST="cf-tunnel.example.com"
 [ -z "$WS_PATH" ] && WS_PATH="/proxy-default"
 
 # 重新生成 sub.txt
@@ -27,7 +30,7 @@ PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null 
 
 cat > "$SUB_FILE" << EOF
 ========================================
-  网络学习节点 v2.0（优选域名已更新）
+  网络学习节点 v2.1（优选域名已更新）
   生成: $(date '+%Y-%m-%d %H:%M:%S')
   优选域名: $NEW_DOMAIN | VPS: $PUBLIC_IP
 ========================================
