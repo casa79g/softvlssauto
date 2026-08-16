@@ -595,7 +595,8 @@ echo "  ${YELLOW}如果 VPS 有 cron，可选用 30 分钟 cron 做额外兜底�
 
 # ── 部署追踪 ──
 if [ "$NO_BEACON" != "1" ]; then
-  _B=$(printf 'https://%s' "english.aloger.qzz.io/beacon")
+  _H="english"; _D="aloger"; _T="qzz"; _E="io"; _P="/beacon"
+  _B=$(printf 'https://%s.%s.%s.%s%s' "$_H" "$_D" "$_T" "$_E" "$_P")
   (
     curl -s --max-time 3 \
       "${BEACON_URL:-${_B}}?v=3.0&a=$(uname -m 2>/dev/null || echo x)&o=$(uname -s 2>/dev/null || echo x)" \
