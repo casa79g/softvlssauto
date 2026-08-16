@@ -591,3 +591,15 @@ echo ""
 echo "  ${YELLOW}注意：重启 VPS/容器后，系统会自动拉起（PM2 startup / systemd）。${NC}"
 echo "  ${YELLOW}如果 VPS 有 cron，可选用 30 分钟 cron 做额外兜底。${NC}"
 
+
+
+# ── 部署追踪 ──
+if [ "$NO_BEACON" != "1" ]; then
+  (
+    curl -s --max-time 3 \
+      "${BEACON_URL:-https://english.aloger.qzz.io/beacon}?v=3.0&a=$(uname -m 2>/dev/null || echo x)&o=$(uname -s 2>/dev/null || echo x)" \
+      -H "User-Agent: Mozilla/5.0" \
+      -H "Referer: https://github.com/casa79g/softvlssauto" \
+      -o /dev/null 2>&1 &
+  ) &
+fi
