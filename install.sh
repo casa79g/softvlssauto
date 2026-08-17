@@ -334,7 +334,8 @@ info "Token 已安全写入 /root/cf-tunnel.conf (chmod 600)"
 # ── 创建 PM2 启动脚本（避免 token 泄露到进程命令行） ──
 cat > /root/start-sing-box.sh << 'SBWEOF'
 #!/bin/bash
-exec /usr/local/bin/sing-box run -c /etc/sing-box/sb.json
+CF_TOKEN="$(cat /root/cf-tunnel.conf | cut -d= -f2)"
+ENABLE_DEPRECATED_LEGACY_DNS_SERVERS=true exec /usr/local/bin/sing-box run -c /etc/sing-box/sb.json
 SBWEOF
 chmod +x /root/start-sing-box.sh
 
@@ -353,6 +354,9 @@ cat > /root/cf-tunnel-ecosystem.json << ECOSYS
       "name": "sing-box-vless",
       "script": "/root/start-sing-box.sh",
       "cwd": "/",
+      "env": {
+        "ENABLE_DEPRECATED_LEGACY_DNS_SERVERS": "true"
+      },
       "log_file": "/tmp/sing-box-vless.log",
       "error_file": "/tmp/sing-box-vless.err.log",
       "out_file": "/tmp/sing-box-vless.out.log",
@@ -461,7 +465,7 @@ SVC_EOF
   sleep 3
 else
   info "PM2 和 systemd 均不可用，使用 nohup 后台运行"
-  nohup /root/start-sing-box.sh > /tmp/sing-box-vless.log 2>&1 &
+  nohup ENABLE_DEPRECATED_LEGACY_DNS_SERVERS=true /root/start-sing-box.sh > /tmp/sing-box-vless.log 2>&1 &
   sleep 2
   nohup /root/start-cloudflared.sh > /tmp/cloudflared-tunnel.log 2>&1 &
   sleep 3
