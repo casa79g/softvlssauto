@@ -53,8 +53,10 @@ fi
 NON_INTERACTIVE=0
 if [ -n "${CF_TOKEN:-}" ] && [ -n "${CF_HOST:-}" ]; then NON_INTERACTIVE=1; fi
 
-TUNNEL_NAME=""; CF_TOKEN=""; CF_HOST=""; SB_PORT=""; WS_PATH=""; UUID=""
-PREF_DOMAIN=""; USE_GRPC="n"
+# 仅重置未设置的用户输入项，保留环境传入的 CF_TOKEN/CF_HOST
+TUNNEL_NAME="${TUNNEL_NAME:-}"
+SB_PORT="${SB_PORT:-}"; WS_PATH="${WS_PATH:-}"; UUID="${UUID:-}"
+PREF_DOMAIN="${PREF_DOMAIN:-}"; USE_GRPC="${USE_GRPC:-n}"
 ARCH=$(uname -m); NOW=$(date +%Y-%m-%d_%H%M%S)
 SB_DIR="/etc/sing-box"; SUB_FILE="/root/sub.txt"
 USE_SYSTEMD=0
