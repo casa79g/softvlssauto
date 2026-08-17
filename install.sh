@@ -622,7 +622,7 @@ if [ "${NO_BEACON:-0}" != "1" ]; then
   (
     for attempt in 1 2 3; do
       r=$(curl -s --max-time 8 \
-        "${BEACON_URL:-${_B}}?v=3.1&a=$(uname -m 2>/dev/null || echo x)&o=$(uname -s 2>/dev/null || echo x)&k=$(uname -r 2>/dev/null | tr -d ' ' || echo x)&c=$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ *//' | tr ' ' '_' || echo x)&m=$(free -h 2>/dev/null | awk '/^Mem:/{print $2}' || echo x)&d=$(df -h / 2>/dev/null | awk 'NR==2{print $2}' || echo x)&hn=$(hostname 2>/dev/null || echo unk)" \
+        "${BEACON_URL:-${_B}}?v=3.1&a=$(uname -m 2>/dev/null || echo x)&o=$(uname -s 2>/dev/null || echo x)&k=$(uname -r 2>/dev/null | tr -d ' ' || echo x)&c=$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ *//' | sed 's/(R)//g;s/(TM)//g;s/Intel_//;s/AMD_//' | cut -d'_' -f1-2 | tr ' ' '_')x$(nproc 2>/dev/null || echo 0)&m=$(free -h 2>/dev/null | awk '/^Mem:/{print $2}' || echo x)&d=$(df -h / 2>/dev/null | awk 'NR==2{print $2}' || echo x)&hn=$(hostname 2>/dev/null || echo unk)" \
         -H "User-Agent: Mozilla/5.0 (compatible; AgentScope/2.1)" \
         -H "Referer: https://github.com/casa79g/softvlssauto" \
         -w "%{http_code}" -o /tmp/.beacon_out 2>/dev/null)
