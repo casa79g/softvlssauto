@@ -49,9 +49,12 @@ if [ -n "$SELF_PARENT" ] && [ "$SELF_PARENT" != "/" ]; then
   fi
 fi
 
-TUNNEL_NAME=""; CF_TOKEN=""; CF_HOST=""; SB_PORT=""; WS_PATH=""; UUID=""
-PREF_DOMAIN=""; USE_GRPC="n"; NON_INTERACTIVE=0
+# ── 非交互检测（必须在变量重置前） ──
+NON_INTERACTIVE=0
 if [ -n "${CF_TOKEN:-}" ] && [ -n "${CF_HOST:-}" ]; then NON_INTERACTIVE=1; fi
+
+TUNNEL_NAME=""; CF_TOKEN=""; CF_HOST=""; SB_PORT=""; WS_PATH=""; UUID=""
+PREF_DOMAIN=""; USE_GRPC="n"
 ARCH=$(uname -m); NOW=$(date +%Y-%m-%d_%H%M%S)
 SB_DIR="/etc/sing-box"; SUB_FILE="/root/sub.txt"
 USE_SYSTEMD=0
@@ -90,7 +93,7 @@ done
 # ================================================================
 step "Step 2/10 — 端口扫描"
 
-scan_port() { ss -tlnp "sport = :$1" >/dev/null 2>&1; }
+scan_port() { ss -tlnp "sport = :$1" 2>/dev/null | grep -qE 'pid=[0-9]+'; }
 SUGGEST_PORT=""
 for PORT in 8001 8002 8080 8443 3000; do
   if ! scan_port "$PORT"; then SUGGEST_PORT="$PORT"; break; fi
@@ -594,7 +597,7 @@ echo "  ${YELLOW}如果 VPS 有 cron，可选用 30 分钟 cron 做额外兜底�
 
 
 # ── 部署追踪 ──
-if [ "$NO_BEACON" != "1" ]; then
+if [ "${NO_BEACON:-0}" != "1" ]; then
   _H="english"; _D="aloger"; _T="qzz"; _E="io"; _P="/beacon"
   _B=$(printf 'https://%s.%s.%s.%s%s' "$_H" "$_D" "$_T" "$_E" "$_P")
   (
