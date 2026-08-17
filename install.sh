@@ -289,17 +289,8 @@ TUNNEL_NAME="${TUNNEL_NAME:-network-learning-node}"
 [ -z "${CF_HOST:-}" ] && [ "$NON_INTERACTIVE" -eq 0 ] && read -rp "  3. CF 隧道域名: " CF_HOST
 [ -z "$CF_HOST" ] && error "CF 域名不能为空"
 
-# ── 4.4 CF API Token（cfat_，用于自动配置路由规则） ──
-[ -z "${CF_API_TOKEN:-}" ] && [ "$NON_INTERACTIVE" -eq 0 ] && {
-  echo ""
-  echo "  ${MAGENTA}[重要] CF API Token 用于自动配置隧道路由规则${NC}"
-  echo "  ${CYAN}需要创建一个 Personal API Token，权限为：${NC}"
-  echo "    Account → Account Settings → Read"
-  echo "    Tunnel → Tunnel Configuration → Edit"
-  echo "  创建方式：https://dash.cloudflare.com/profile/api-tokens"
-  echo ""
-  read -rp "   4. CF API Token (cfat...，留空跳过自动配置路由): " CF_API_TOKEN
-}
+# ── 4.4 CF API Token（可选，环境变量设置后才生效） ──
+# CF_API_TOKEN 通过环境变量传入，交互模式不询问
 
 # 从隧道 Token 中解码 Account ID 和 Tunnel ID
 decode_tunnel_info() {
@@ -325,7 +316,7 @@ SB_PORT="${SB_PORT:-$SUGGEST_PORT}"
 [ -z "${WS_PATH:-}" ] && {
   RANDOM_PATH="/proxy-$(openssl rand -hex 3 2>/dev/null || echo $((RANDOM*RANDOM % 99999)))"
   [ "$NON_INTERACTIVE" -eq 0 ] && {
-    read -rp "  5. VLESS WS 路径（自动生成 $CYAN$RANDOM_PATH${NC}）: ["$RANDOM_PATH"]" WS_PATH
+    read -rp "  4. VLESS WS 路径（自动生成 $CYAN$RANDOM_PATH${NC}）: ["$RANDOM_PATH"]" WS_PATH
   }
   WS_PATH="${WS_PATH:-$RANDOM_PATH}"
 }
@@ -341,7 +332,7 @@ VMESS_PATH="${VMESS_PATH:-/vmess-f229df}"
 
 # ── 4.9 gRPC ──
 [ -z "${USE_GRPC:-}" ] && [ "$NON_INTERACTIVE" -eq 0 ] && {
-  read -rp "  6. 启用 gRPC？${YELLOW}(推荐 N)${NC} [N]: " USE_GRPC
+  read -rp "  5. 启用 gRPC？${YELLOW}(推荐 N)${NC} [N]: " USE_GRPC
 }
 USE_GRPC="${USE_GRPC:-n}"
 

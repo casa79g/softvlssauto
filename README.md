@@ -31,7 +31,7 @@
 
 - **必需**：root 权限、curl、openssl、bash、base64
 - **推荐**：Node.js（PM2 需要，脚本会自动安装）
-- **CF API Token**：可选，提供后脚本自动配置隧道路由规则（`cfat_`，权限 `Tunnel:Configuration:Edit`）
+- **CF API Token**（可选）：提供后脚本自动配置隧道路由规则；不提供则需手动在 CF 面板配置
 
 ## 🚀 快速部署
 
@@ -40,16 +40,16 @@
 curl -fsSL https://raw.githubusercontent.com/casa79g/softvlssauto/main/install.sh | bash
 ```
 
-### 方式二：无交互部署（含 CF API Token）
+### 方式二：无交互部署
 ```bash
 export CF_TOKEN="eyJh..."                              # Cloudflare Tunnel Token
 export CF_HOST="xxxxxx.cloudflarecf.app"                # CF 隧道域名
-export CF_API_TOKEN="cfat_xxx..."                       # CF API Token（自动配置路由）
-export CF_ACCOUNT_ID="your-account-id"                  # 可选，自动解码
 export TUNNEL_NAME="network-learning-node"
-export PREF_DOMAIN="cf.godns.cc"
+export PREF_DOMAIN="cf.godns.cc"                        # 可选，默认 cf.godns.cc
 curl -fsSL https://raw.githubusercontent.com/casa79g/softvlssauto/main/install.sh | bash
 ```
+
+> **可选**：提供 `CF_API_TOKEN`（`cfat_`）后脚本会自动配置隧道路由规则，否则需手动在 CF 面板配置（见 [CF 隧道路由配置](#-cf-隧道路由配置)）。
 
 ### 方式三：自定义参数
 ```bash
