@@ -94,6 +94,25 @@ bash query.sh          # 检查节点状态、PM2 进程、日志、连通性
 cat /root/sub.txt      # 查看分享链接和节点配置
 ```
 
+## ⚡ 快速测速（检测 VPS 真实带宽）
+
+> **用途**：判断节点速度瓶颈是"VPS 出口带宽被限"还是"客户端线路问题"。
+> 若测出下行 ≤25Mbps，说明是小水管/被限速，换优选域名、调协议都无法突破；若能跑 100Mbps+，瓶颈在客户端侧。
+
+### 方式一：Ookla Speedtest CLI（推荐，一键）
+```bash
+cd /tmp && curl -sL https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-x86_64.tgz -o st.tgz && tar xzf st.tgz && chmod +x speedtest && ./speedtest --accept-license --accept-gdpr
+```
+
+### 方式二：Cloudflare 文件下载测速（轻量，无依赖）
+```bash
+# 下行测速（20MB 测试文件）
+curl -o /dev/null -s -w "down=%{speed_download} B/s time=%{time_total}s\n" "https://speed.cloudflare.com/__down?bytes=20000000"
+
+# 上行测速（注意：部分机房可能屏蔽）
+dd if=/dev/zero bs=1M count=20 2>/dev/null | curl -s -X POST --data-binary @- -o /dev/null -w "up=%{speed_upload} B/s\n" "https://speed.cloudflare.com/__up"
+```
+
 ## ❌ 卸载
 
 ```bash
