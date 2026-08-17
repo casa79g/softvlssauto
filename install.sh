@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# CF Tunnel + VLESS 自动部署脚本 v3.0
+# CF Tunnel + VLESS 自动部署脚本 v3.3
 # VLESS Tunnel Deploy Toolkit部署工具
 # 守护架构：PM2（主） + systemd（容器兜底） + cron（可选）
 # ============================================================
@@ -509,7 +509,7 @@ VLESS_URL="vless://${UUID}@${PREF_DOMAIN}:443?encryption=none&security=tls&type=
 
 cat > "$SUB_FILE" << SUBEOF
 ========================================
-  VLESS Tunnel Deploy Toolkit v3.0
+  VLESS Tunnel Deploy Toolkit v3.3
   生成: $(date '+%Y-%m-%d %H:%M:%S')
   VPS:  $PUBLIC_IP | 隧道: $TUNNEL_NAME
 ========================================
@@ -559,7 +559,7 @@ step "Step 9/10 — 部署完成"
 
 cat << DONE
 ╔═══════════════════════════════════════════════════════════╗
-║                  部署成功！v3.0                           ║
+║                  部署成功！v3.3                           ║
 ╠═══════════════════════════════════════════════════════════╣
 ║                                                           ║
 ║   sing-box:  监听 $SB_PORT 端口 (127.0.0.1)            ║
