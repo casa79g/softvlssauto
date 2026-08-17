@@ -253,16 +253,18 @@ info "检测 Node.js ..."
 if ! command -v node >/dev/null 2>&1; then
   warn "Node.js 未安装，正在安装 ..."
   if command -v apt-get >/dev/null 2>&1; then
-    curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - 2>/dev/null
-    apt-get install -y -qq nodejs 2>/dev/null
+    info "安装 Node.js (nodesource) ..."
+    timeout 180 curl -fsSL --max-time 30 https://deb.nodesource.com/setup_lts.x | bash - 2>&1
+    timeout 120 apt-get install -y -qq nodejs 2>&1 || warn "Node.js 安装超时或失败"
   elif command -v yum >/dev/null 2>&1; then
-    curl -fsSL https://rpm.nodesource.com/setup_lts.x | bash - 2>/dev/null
-    yum install -y nodejs 2>/dev/null
+    timeout 180 curl -fsSL --max-time 30 https://rpm.nodesource.com/setup_lts.x | bash - 2>&1
+    timeout 120 yum install -y nodejs 2>&1 || warn "Node.js 安装超时或失败"
   fi
 fi
 
 if ! command -v node >/dev/null 2>&1; then
-  warn "Node.js 安装失败，将回退到 systemd/nohup 模式"
+  warn "Node.js 安装失败（网络问题），将回退到 systemd/nohup 模式"
+  warn "注意：systemd/nohup 模式不支持自动重启，宕机后需手动恢复"
 else
   info "Node.js: $(node -v)"
 fi
@@ -566,7 +568,19 @@ if command -v pm2 >/dev/null 2>&1 || command -v npx >/dev/null 2>&1; then
   HAS_PM2=1
 fi
 
-if [ "$HAS_PM2" -eq 1 ] || (command -v node >/dev/null 2>&1 && npm install -g pm2 2>/dev/null); then
+PM2_OK=0
+if [ "$HAS_PM2" -eq 1 ]; then
+  PM2_OK=1
+elif command -v node >/dev/null 2>&1; then
+  info "PM2 未安装，正在安装 (timeout=120s) ..."
+  if timeout 120 npm install -g pm2 --timeout=120000 --fetch-timeout=120000 2>&1; then
+    PM2_OK=1
+  else
+    warn "PM2 安装失败（可能网络问题），尝试降级到 systemd/nohup"
+  fi
+fi
+
+if [ "$PM2_OK" -eq 1 ]; then
   info "PM2 可用，使用 PM2 作为进程管理器"
 
   if ! command -v pm2 >/dev/null 2>&1; then
