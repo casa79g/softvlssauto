@@ -340,8 +340,8 @@ chmod +x /root/start-sing-box.sh
 
 cat > /root/start-cloudflared.sh << 'CFWEOF'
 #!/bin/bash
-CF_TOKEN="$(cat /root/cf-tunnel.conf | cut -d= -f2)"
-exec /usr/local/bin/cloudflared tunnel run --token "$CF_TOKEN" --protocol h2c
+CF_TOKEN="$(sed 's/^token=//' /root/cf-tunnel.conf)"
+exec /usr/local/bin/cloudflared tunnel run --token "$CF_TOKEN"
 CFWEOF
 chmod +x /root/start-cloudflared.sh
 
@@ -571,7 +571,7 @@ cat << DONE
 ╠═══════════════════════════════════════════════════════════╣
 ║                                                           ║
 ║   sing-box:  监听 $SB_PORT 端口 (127.0.0.1)            ║
-║   cloudflared: CF隧道 $TUNNEL_NAME (h2c) 已建立        ║
+║   cloudflared: CF隧道 $TUNNEL_NAME 已建立（auto协议）        ║
 ║   守护进程: PM2（主） / systemd（兜底）                  ║
 ║   sub.txt:  /root/sub.txt                                ║
 ║                                                           ║
