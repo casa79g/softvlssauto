@@ -706,12 +706,12 @@ PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null 
 VMESS_REAL_JSON=$(cat << VJSON
 {
   "v": "2",
-  "ps": "真实域名-VMess",
+  "ps": "${PREF_DOMAIN}-VMess",
   "add": "${CF_HOST}",
   "port": "443",
   "type": "ws",
   "id": "${UUID}",
-  "aid": "0",
+  "aid": 0,
   "net": "ws",
   "host": "${CF_HOST}",
   "path": "${VMESS_PATH}",
@@ -721,7 +721,7 @@ VMESS_REAL_JSON=$(cat << VJSON
 }
 VJSON
 )
-VMESS_PREF_JSON=$(echo "$VMESS_REAL_JSON" | sed "s|真实域名-VMess|${PREF_DOMAIN}-VMess|; s|\"add\": \"${CF_HOST}\"|\"add\": \"${PREF_DOMAIN}\"|")
+VMESS_PREF_JSON=$(echo "$VMESS_REAL_JSON" | sed "s|\"add\": \"${CF_HOST}\"|\"add\": \"${PREF_DOMAIN}\"|")
 
 VMESS_PREF_B64=$(printf '%s' "$VMESS_PREF_JSON" | base64 -w0 2>/dev/null || printf '%s' "$VMESS_PREF_JSON" | base64 | tr -d '\n')
 VMESS_REAL_B64=$(printf '%s' "$VMESS_REAL_JSON" | base64 -w0 2>/dev/null || printf '%s' "$VMESS_REAL_JSON" | base64 | tr -d '\n')
@@ -751,7 +751,7 @@ ${MAGENTA}【推荐配置】VMess + WS — 优选域名（主推，稳定性最�
   ${YELLOW}分片(Fragment): 包长 100-200，间隔 10-20ms（客户端手动开启）${NC}
 
   分享链接:
-  vmess://${VMESS_PREF_B64}#优选域名-VMess
+  vmess://${VMESS_PREF_B64}
 
   ${MAGENTA}【备选配置一】VLESS + WS — 优选域名（分片优化）${NC}
   与推荐配置区别：协议不同，地址同为优选域名

@@ -42,7 +42,7 @@ VMESS_REAL_JSON=$(cat << VJSON
   "port": "443",
   "type": "ws",
   "id": "${UUID}",
-  "aid": "0",
+  "aid": 0,
   "net": "ws",
   "host": "${CF_HOST}",
   "path": "${VMESS_PATH}",
@@ -78,7 +78,7 @@ cat > "$SUB_FILE" << EOF
   分片(Fragment): 包长 100-200，间隔 10-20ms（客户端手动开启）
 
   分享链接:
-  vmess://${VMESS_PREF_B64}#优选域名-VMess
+  vmess://${VMESS_PREF_B64}
 
 【备选配置一】VLESS + WS — 优选域名（分片优化）
   与推荐配置区别：协议不同，地址同为优选域名
@@ -102,7 +102,7 @@ EOF
 echo "已切换到: $NEW_DOMAIN"
 echo ""
 echo "VMess 分享链接（优选域名）:"
-echo "vmess://${VMESS_PREF_B64}#优选域名-VMess"
+echo "vmess://${VMESS_PREF_B64}"
 echo ""
 echo "VLESS 分享链接（优选域名）:"
 echo "$VLESS_PREF#优选域名-VLESS-分片"
