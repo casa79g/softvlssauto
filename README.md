@@ -1,8 +1,20 @@
-# CF Tunnel + VLESS 自动部署 v3.0
+# CF Tunnel + VMess/VLESS 自动部署 v4.0
 
 基于 Cloudflare Tunnel + sing-box 的网络学习方案，**无需开放公网端口**，零端口暴露。
 
-## 🏗️ 守护架构（v3.0 核心变化）
+## 🔥 v4.0 核心变化
+
+| 特性 | v3.x | v4.0 |
+|------|------|------|
+| 协议 | VLESS only | **VMess（主推）+ VLESS（备选）** |
+| VMess 入口 | ❌ | ✅ 8003 端口，路径 `/vmess-f229df` |
+| CF 路由配置 | 手动 | **脚本自动**（提供 CF API Token 时） |
+| 分片支持 | 无 | VMess/VLESS 均提示分片参数 |
+| sub.txt 顺序 | VLESS 真实→优选 | **VMess优选→VLESS优选→VLESS真实** |
+
+> **为什么 VMess 更稳？** VMess 自带加密使 CF 边缘无法做 HTTP/2 帧级"优化"而原样转发，buffer 更持久，断流更少。VLESS 透传被 CF 做 HTTP/2 帧重组，负载均衡切换时易断流。
+
+## 🏗️ 守护架构（v3.0 起，v4.0 沿用）
 
 ```
 主守护：PM2（Node.js 进程管理器）
@@ -12,20 +24,14 @@
 └── 优雅重启 → pm2 restart all（不用先 kill）
 
 兜底1：systemd（容器环境 PM2 不可用时自动降级）
-└── systemd service 文件，自带 Restart=always
-
 兜底2：cron（可选，仅限 VPS 有 cron 服务时）
-└── 每 30 分钟检查一次，仅做额外保护
-└── 无 cron 的 VPS 直接用 PM2/systemd 完全 OK
 ```
-
-> **为什么用 PM2？** 对比原方案：原方案靠 cron 每 10 分钟检查，宕机恢复最长 10 分钟。PM2 是专业的进程管理器，进程一挂立刻重启，开机自动拉起，自带日志滚动。cron 只是可选兜底，不是强制依赖。
 
 ## 📋 系统要求
 
-- **必需**：root 权限、curl、openssl、bash
+- **必需**：root 权限、curl、openssl、bash、base64
 - **推荐**：Node.js（PM2 需要，脚本会自动安装）
-- **可选**：systemd（无则用 nohup）、cron（可选兜底）
+- **CF API Token**：可选，提供后脚本自动配置隧道路由规则（`cfat_`，权限 `Tunnel:Configuration:Edit`）
 
 ## 🚀 快速部署
 
@@ -34,12 +40,14 @@
 curl -fsSL https://raw.githubusercontent.com/casa79g/softvlssauto/main/install.sh | bash
 ```
 
-### 方式二：无交互部署（适合脚本化/批量）
+### 方式二：无交互部署（含 CF API Token）
 ```bash
-export CF_TOKEN="eyJh..."          # Cloudflare Tunnel Token
-export CF_HOST="xxxxxx.cloudflarecf.app"  # CF 隧道域名
+export CF_TOKEN="eyJh..."                              # Cloudflare Tunnel Token
+export CF_HOST="xxxxxx.cloudflarecf.app"                # CF 隧道域名
+export CF_API_TOKEN="cfat_xxx..."                       # CF API Token（自动配置路由）
+export CF_ACCOUNT_ID="your-account-id"                  # 可选，自动解码
 export TUNNEL_NAME="network-learning-node"
-export PREF_DOMAIN="cf.godns.cc"     # 可选，默认 cf.godns.cc
+export PREF_DOMAIN="cf.godns.cc"
 curl -fsSL https://raw.githubusercontent.com/casa79g/softvlssauto/main/install.sh | bash
 ```
 
@@ -47,11 +55,14 @@ curl -fsSL https://raw.githubusercontent.com/casa79g/softvlssauto/main/install.s
 ```bash
 export CF_TOKEN="eyJh..."
 export CF_HOST="xxxxxx.cloudflarecf.app"
-export SB_PORT=8001                    # sing-box 监听端口
-export WS_PATH="/proxy-abcdef"         # WS 路径
-export UUID="your-uuid-here"           # 客户端 UUID
+export CF_API_TOKEN="cfat_xxx..."                       # 可选
+export SB_PORT=8001                                     # VLESS 端口
+export VMESS_PORT=8003                                  # VMess 端口（固定）
+export WS_PATH="/proxy-abcdef"                          # VLESS WS 路径
+export VMESS_PATH="/vmess-f229df"                       # VMess WS 路径
+export UUID="your-uuid-here"
 export PREF_DOMAIN="cf.godns.cc"
-export USE_GRPC="n"                    # 是否启用 gRPC 入口
+export USE_GRPC="n"
 bash install.sh
 ```
 
@@ -59,59 +70,96 @@ bash install.sh
 
 | 文件 | 说明 |
 |------|------|
-| `install.sh` | 主安装脚本，PM2 守护 |
-| `sb-template.json` | sing-box 配置模板 |
-| `gen_links.sh` | 切换 CF 优选域名 |
+| `install.sh` | 主安装脚本（v4.0，PM2 守护） |
+| `gen_links.sh` | 切换 CF 优选域名（支持 VMess/VLESS） |
 | `query.sh` | 节点信息查询与诊断 |
-| `/etc/sing-box/sb.json` | sing-box 配置文件 |
+| `/etc/sing-box/sb.json` | sing-box 配置（VLESS:$SB_PORT + VMess:8003） |
 | `/root/cf-tunnel-ecosystem.json` | PM2 进程配置（权限 600） |
 | `/root/sub.txt` | 客户端分享链接（权限 600） |
 
+## 📡 客户端配置（按推荐顺序）
+
+### 1️⃣ VMess + 优选域名（主推）
+```
+地址:  cf.godns.cc
+端口:  443
+协议:  VMess
+UUID:  <从 sub.txt 获取>
+AlterID: 0
+传输:  WebSocket
+Host/SNI: <CF 隧道域名，从 sub.txt 获取>
+路径:  /vmess-f229df
+TLS:   true
+指纹:  chrome
+分片:  包长 100-200，间隔 10-20ms（客户端手动开启）
+```
+
+### 2️⃣ VLESS + 优选域名（备选，分片优化）
+```
+地址:  cf.godns.cc
+端口:  443
+协议:  VLESS
+UUID:  <从 sub.txt 获取>
+传输:  WebSocket
+Host/SNI: <CF 隧道域名>
+路径:  <从 sub.txt 获取>
+TLS:   true
+指纹:  chrome
+分片:  包长 100-200，间隔 10-20ms
+```
+
+### 3️⃣ VLESS + 真实隧道域名（连通测试用）
+```
+地址:  <CF 隧道域名>
+用途:  TLS 握手必通，用于验证隧道连通性
+```
+
+> **Host/SNI 必须保持为真实隧道域名**，不可改为优选域名。
+
 ## 🔧 管理命令
 
-### PM2 方式（v3.0 默认）
 ```bash
 pm2 list                  # 查看所有进程状态
 pm2 logs                  # 实时查看日志
-pm2 logs --lines 50       # 查看最近 50 行
 pm2 restart all           # 重启所有服务
-pm2 restart sing-box-vless  # 只重启 sing-box
 pm2 stop all              # 停止所有服务
-pm2 save                  # 保存进程列表（修改配置后）
-```
-
-### 传统 systemd（v1.x 方式，仍然兼容）
-```bash
-systemctl status sing-box-vless
-systemctl restart sing-box-vless cloudflared-tunnel
-journalctl -u sing-box-vless -f
+pm2 save                  # 保存进程列表
+cat /root/sub.txt         # 查看分享链接
+bash gen_links.sh <新域名> # 切换优选域名
 ```
 
 ## 🔍 诊断
 
 ```bash
 bash query.sh          # 检查节点状态、PM2 进程、日志、连通性
-cat /root/sub.txt      # 查看分享链接和节点配置
+curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8001/    # VLESS 本地 (400=正常)
+curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8003/    # VMess 本地 (400=正常)
 ```
 
 ## ⚡ 快速测速（检测 VPS 真实带宽）
 
-> **用途**：判断节点速度瓶颈是"VPS 出口带宽被限"还是"客户端线路问题"。
-> 若测出下行 ≤25Mbps，说明是小水管/被限速，换优选域名、调协议都无法突破；若能跑 100Mbps+，瓶颈在客户端侧。
-
-### 方式一：Ookla Speedtest CLI（推荐，一键）
+### 方式一：Ookla Speedtest CLI（推荐）
 ```bash
 cd /tmp && curl -sL https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-x86_64.tgz -o st.tgz && tar xzf st.tgz && chmod +x speedtest && ./speedtest --accept-license --accept-gdpr
 ```
 
-### 方式二：Cloudflare 文件下载测速（轻量，无依赖）
+### 方式二：Cloudflare 下载测速
 ```bash
-# 下行测速（20MB 测试文件）
 curl -o /dev/null -s -w "down=%{speed_download} B/s time=%{time_total}s\n" "https://speed.cloudflare.com/__down?bytes=20000000"
-
-# 上行测速（注意：部分机房可能屏蔽）
-dd if=/dev/zero bs=1M count=20 2>/dev/null | curl -s -X POST --data-binary @- -o /dev/null -w "up=%{speed_upload} B/s\n" "https://speed.cloudflare.com/__up"
 ```
+
+## 🌐 CF 隧道路由配置
+
+v4.0 脚本会自动调用 CF API 配置以下路由规则：
+
+| 路径规则 | 目标端口 | 协议 |
+|---------|---------|------|
+| `^/vmess-f229df` | 8003 | VMess |
+| 留空（catch-all） | 8001 | VLESS |
+
+如未提供 `CF_API_TOKEN`，需在 CF 面板手动配置：
+- CF Dashboard → Zero Trust → Networks → Tunnels → 你的隧道 → Routes
+- 添加两条规则：`^/vmess-f229df` → `http://localhost:8003`，留空 → `http://localhost:8001`
 
 ## ❌ 卸载
 
@@ -119,35 +167,12 @@ dd if=/dev/zero bs=1M count=20 2>/dev/null | curl -s -X POST --data-binary @- -o
 bash install.sh uninstall
 ```
 
-自动执行：
-1. `pm2 delete all`（停止并删除 PM2 进程）
-2. `pm2 save`（清空进程列表）
-3. 删除配置文件（`/etc/sing-box/sb.json`、`/root/cf-tunnel-ecosystem.json`）
-4. 删除订阅文件（`/root/sub.txt`）
-5. 清理日志文件
-
-## 📋 架构说明
-
-```
-客户端 (V2RayN/Karing)
-    │
-    ▼  VLESS over WebSocket + TLS
-优选域名 (cf.godns.cc) → Cloudflare Edge
-    │
-    ▼  CF Tunnel (免费，零端口暴露)
-cloudflared (PM2 守护)
-    │
-    ▼  HTTP/2 → 127.0.0.1:8001
-sing-box (PM2 守护)
-    │
-    ▼  转发到目标网站
-```
-
 ## ⚠️ 注意事项
 
-1. **CF Tunnel Token 和域名** 在 Cloudflare 面板 → Network → Tunnels 获取
-2. **CF 域名格式** 类似 `xxxxxxxx-xxxxxxxx-xxxxxxxx-xxxxxxxx.cloudflarecf.app`
-3. **优选域名** 选择离**客户端本地**近的服务商，不是离 VPS 近的
-4. **重启后**：PM2 通过 `pm2 startup` 自动拉起，无需任何操作
-5. **gRPC 入口**：默认不启用（VLESS 已够用）；如需启用 `export USE_GRPC=y`
-6. **/etc/hosts**：安装脚本会自动修复 IPv6 localhost 问题
+1. **CF Tunnel Token**（`eyJh...`）在 Cloudflare 面板 → Network → Tunnels 获取
+2. **CF API Token**（`cfat_`）需 `Tunnel:Configuration:Edit` 权限，创建方式：https://dash.cloudflare.com/profile/api-tokens
+3. **优选域名** 选择离客户端本地近的服务商
+4. **重启后**：PM2 通过 `pm2 startup` 自动拉起
+5. **gRPC**：默认不启用；如需 `export USE_GRPC=y`
+6. **/etc/hosts**：脚本会自动修复 IPv6 localhost 问题
+7. **分片参数**：VMess 无标准分片 URL 参数，导入 V2RayN 后需在节点设置里手动开启（包长 100-200，间隔 10-20ms）

@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================
-# CF Tunnel + VLESS 自动部署脚本 v3.3
-# VLESS Tunnel Deploy Toolkit部署工具
+# CF Tunnel + VMess/VLESS 自动部署脚本 v4.0
+# 协议：主推 VMess+优选域名 / 辅出 VLESS+优选域名(分片) / VLESS+真实域名
 # 守护架构：PM2（主） + systemd（容器兜底） + cron（可选）
 # ============================================================
 set -uo pipefail
 
-GREEN='\033[0;32m'; RED='\033[0;31m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'
-NC='\033[0m'; BOLD='\033[1m'
+GREEN='\033[0;32m'; RED='\033[0;31m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'; MAGENTA='\033[0;35m'
+NC='\033[0m'; BOLD='\033[1m]'
 
 info()  { echo -e "  ${GREEN}[INFO]${NC} $1"; }
 warn()  { echo -e "  ${YELLOW}[WARN]${NC} $1"; }
@@ -18,30 +18,26 @@ step()  { echo -e "\n${BOLD}━━━━━━━━━━━━━━━━━�
 
 # ================================================================
 # 目录自愈：修正 git clone 嵌套问题
-# 如果检测到 /root/softvlssauto/softvlssauto/ 这种多层嵌套，
-# 把内层文件合并到外层，然后删除多余层。
 # ================================================================
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 SCRIPT_BASENAME="$(basename "$SELF_DIR")"
 SELF_PARENT="$(dirname "$SELF_DIR")"
 
 if [ -n "$SELF_PARENT" ] && [ "$SELF_PARENT" != "/" ]; then
-  # 检测外层是否也有同名目录（说明我们被嵌在里面了）
   OUTER_SCRIPT="${SELF_PARENT}/${SCRIPT_BASENAME}"
   if [ -d "$SELF_DIR" ] && [ -f "${SELF_DIR}/${SCRIPT_BASENAME}.sh" ] && [ -d "${SELF_DIR}/${SCRIPT_BASENAME}" ]; then
     warn "检测到嵌套目录结构，正在修复..."
-    for f in install.sh gen_links.sh query.sh sb-template.json uninstall.sh README.md; do
+    for f in install.sh gen_links.sh query.sh uninstall.sh README.md; do
       [ -f "${SELF_DIR}/${SCRIPT_BASENAME}/${f}" ] && cp "${SELF_DIR}/${SCRIPT_BASENAME}/${f}" "${SELF_DIR}/${f}" 2>/dev/null
     done
     rm -rf "${SELF_DIR}/${SCRIPT_BASENAME}"
     info "嵌套目录已修正（展开至 ${SELF_DIR}/）"
   fi
 
-  # 检测同一目录下是否还有同名的旧克隆副本
   OLD_CLONE="${SELF_DIR}/softvlssauto"
   if [ -d "$OLD_CLONE" ] && [ -f "${OLD_CLONE}/install.sh" ]; then
     warn "检测到旧克隆副本，正在清理..."
-    for f in install.sh gen_links.sh query.sh sb-template.json uninstall.sh README.md; do
+    for f in install.sh gen_links.sh query.sh uninstall.sh README.md; do
       [ -f "${OLD_CLONE}/${f}" ] && cp "${OLD_CLONE}/${f}" "${SELF_DIR}/${f}" 2>/dev/null
     done
     rm -rf "$OLD_CLONE"
@@ -49,14 +45,15 @@ if [ -n "$SELF_PARENT" ] && [ "$SELF_PARENT" != "/" ]; then
   fi
 fi
 
-# ── 非交互检测（必须在变量重置前） ──
+# ── 非交互检测 ──
 NON_INTERACTIVE=0
 if [ -n "${CF_TOKEN:-}" ] && [ -n "${CF_HOST:-}" ]; then NON_INTERACTIVE=1; fi
 
-# 仅重置未设置的用户输入项，保留环境传入的 CF_TOKEN/CF_HOST
+# 用户输入参数（非交互模式下从环境变量读取）
 TUNNEL_NAME="${TUNNEL_NAME:-}"
 SB_PORT="${SB_PORT:-}"; WS_PATH="${WS_PATH:-}"; UUID="${UUID:-}"
 PREF_DOMAIN="${PREF_DOMAIN:-}"; USE_GRPC="${USE_GRPC:-n}"
+CF_API_TOKEN="${CF_API_TOKEN:-}"; CF_ACCOUNT_ID="${CF_ACCOUNT_ID:-}"
 ARCH=$(uname -m); NOW=$(date +%Y-%m-%d_%H%M%S)
 SB_DIR="/etc/sing-box"; SUB_FILE="/root/sub.txt"
 USE_SYSTEMD=0
@@ -83,7 +80,7 @@ echo -e "  ${GREEN}[INFO]${NC} 系统: $SYS | 架构: $ARCH | 内核: $(uname -r
 echo -e "  ${GREEN}[INFO]${NC} 磁盘: 可用 $DISK_FREE / 总计 $DISK_TOTAL"
 echo -e "  ${GREEN}[INFO]${NC} systemd: $([ "$USE_SYSTEMD" -eq 1 ] && echo "可用" || echo "不可用（容器）")"
 
-for cmd in curl wget jq python3 file openssl; do
+for cmd in curl wget jq python3 file openssl base64; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     warn "缺少 $cmd，正在安装..."
     (apt-get install -y -qq "$cmd" 2>/dev/null || yum install -y "$cmd" 2>/dev/null) || true
@@ -109,7 +106,7 @@ port_cmd() {
   done
 }
 SUGGEST_PORT=""
-for PORT in 8001 8002 8080 8443 3000; do
+for PORT in 8001 8002 8003 8080 8443 3000; do
   if ! scan_port "$PORT"; then SUGGEST_PORT="$PORT"; break; fi
 done
 [ -z "$SUGGEST_PORT" ] && SUGGEST_PORT="8001"
@@ -117,7 +114,7 @@ done
 printf "  ${BOLD}┌──────────┬────────┬──────────────────────┐${NC}\n"
 printf "  ${BOLD}│  端口    │ 状态   │ 占用进程            │${NC}\n"
 printf "  ${BOLD}├──────────┼────────┼──────────────────────┤${NC}\n"
-for PORT in 80 443 8001 8002 8080 8443 3000; do
+for PORT in 80 443 8001 8002 8003 8080 8443 3000; do
   if scan_port "$PORT"; then
     PID=$(port_pid "$PORT")
     CMD=$(port_cmd "$PORT")
@@ -140,11 +137,16 @@ kill_port() {
 [ "$NON_INTERACTIVE" -eq 1 ] && SB_PORT="$SUGGEST_PORT" && \
   (scan_port "$SB_PORT" && kill_port "$SB_PORT") || true
 [ "$NON_INTERACTIVE" -eq 0 ] && {
-  read -rp "  sing-box 监听端口（推荐 ${CYAN}${SUGGEST_PORT}${NC}）: ["$SUGGEST_PORT"]" SB_PORT
+  read -rp "  sing-box VLESS 监听端口（推荐 ${CYAN}${SUGGEST_PORT}${NC}）: ["$SUGGEST_PORT"]" SB_PORT
   SB_PORT="${SB_PORT:-$SUGGEST_PORT}"
   scan_port "$SB_PORT" && kill_port "$SB_PORT" && info "端口已释放"
 }
-info "sing-box 监听端口: $SB_PORT"
+info "sing-box VLESS 监听端口: $SB_PORT"
+
+# VMess 固定使用 8003
+VMESS_PORT=8003
+scan_port "$VMESS_PORT" && kill_port "$VMESS_PORT" && info "VMess 端口 8003 已释放"
+info "sing-box VMess 监听端口: $VMESS_PORT（固定）"
 
 # ================================================================
 # Step 2.5 — 网络检测
@@ -215,7 +217,7 @@ fi
 [ "$CF_DL" -eq 0 ] && error "cloudflared 下载失败"
 chmod +x /usr/local/bin/cloudflared; info "cloudflared 下载完成"
 
-# ── Node.js + PM2（主进程管理器） ──
+# ── Node.js + PM2 ──
 info "检测 Node.js ..."
 if ! command -v node >/dev/null 2>&1; then
   warn "Node.js 未安装，正在安装 ..."
@@ -239,51 +241,99 @@ fi
 # ================================================================
 step "Step 4/10 — 参数配置"
 
+# ── 4.1 隧道名称 ──
 [ -z "${TUNNEL_NAME:-}" ] && [ "$NON_INTERACTIVE" -eq 0 ] && {
-  read -rp "  1. 隧道名称: [network-learning-node]" TUNNEL_NAME; TUNNEL_NAME="${TUNNEL_NAME:-network-learning-node}"
-} || TUNNEL_NAME="${TUNNEL_NAME:-network-learning-node}"
+  read -rp "  1. 隧道名称: [network-learning-node]" TUNNEL_NAME
+}
+TUNNEL_NAME="${TUNNEL_NAME:-network-learning-node}"
 
+# ── 4.2 隧道 Token（eyJh...） ──
 [ -z "${CF_TOKEN:-}" ] && [ "$NON_INTERACTIVE" -eq 0 ] && {
   echo "  ${YELLOW}提示：Token 较长（约200字符），整段复制后粘贴${NC}"
   echo -n "  2. 隧道 Token (eyJh...): "; read -r CF_TOKEN
 }
 [ -z "$CF_TOKEN" ] && error "Token 不能为空"
 
+# ── 4.3 CF 隧道域名 ──
 [ -z "${CF_HOST:-}" ] && [ "$NON_INTERACTIVE" -eq 0 ] && read -rp "  3. CF 隧道域名: " CF_HOST
 [ -z "$CF_HOST" ] && error "CF 域名不能为空"
 
+# ── 4.4 CF API Token（cfat_，用于自动配置路由规则） ──
+[ -z "${CF_API_TOKEN:-}" ] && [ "$NON_INTERACTIVE" -eq 0 ] && {
+  echo ""
+  echo "  ${MAGENTA}[重要] CF API Token 用于自动配置隧道路由规则${NC}"
+  echo "  ${CYAN}需要创建一个 Personal API Token，权限为：${NC}"
+  echo "    Account → Account Settings → Read"
+  echo "    Tunnel → Tunnel Configuration → Edit"
+  echo "  创建方式：https://dash.cloudflare.com/profile/api-tokens"
+  echo ""
+  read -rp "   4. CF API Token (cfat...，留空跳过自动配置路由): " CF_API_TOKEN
+}
+
+# 从隧道 Token 中解码 Account ID 和 Tunnel ID
+decode_tunnel_info() {
+  _PAYLOAD=$(echo "$1" | cut -d'.' -f2 | sed 's/-$/=/' | sed 's/_$/=/' | sed 's/-/+/g; s/_/\//g' 2>/dev/null)
+  if [ -n "$_PAYLOAD" ]; then
+    _ACCOUNT_TAG=$(echo "$_PAYLOAD" | base64 -d 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('accountTag',''))" 2>/dev/null)
+    _TUNNEL_ID=$(echo "$_PAYLOAD" | base64 -d 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tunnelID',''))" 2>/dev/null)
+  fi
+}
+
+decode_tunnel_info "$CF_TOKEN"
+CF_ACCOUNT_ID="${CF_ACCOUNT_ID:-$_ACCOUNT_TAG}"
+TUNNEL_ID="${TUNNEL_ID:-$_TUNNEL_ID}"
+
+if [ -n "$CF_ACCOUNT_ID" ] && [ -n "$TUNNEL_ID" ]; then
+  info "已解码: Account ID=$CF_ACCOUNT_ID | Tunnel ID=$TUNNEL_ID"
+fi
+
+# ── 4.5 sing-box 端口 ──
 SB_PORT="${SB_PORT:-$SUGGEST_PORT}"
 
+# ── 4.6 WS 路径（VLESS 用） ──
 [ -z "${WS_PATH:-}" ] && {
   RANDOM_PATH="/proxy-$(openssl rand -hex 3 2>/dev/null || echo $((RANDOM*RANDOM % 99999)))"
   [ "$NON_INTERACTIVE" -eq 0 ] && {
-    read -rp "  4. WS 路径（自动生成 $CYAN$RANDOM_PATH${NC}）: ["$RANDOM_PATH"]" WS_PATH
+    read -rp "  5. VLESS WS 路径（自动生成 $CYAN$RANDOM_PATH${NC}）: ["$RANDOM_PATH"]" WS_PATH
   }
   WS_PATH="${WS_PATH:-$RANDOM_PATH}"
 }
 
+# VMess 路径固定
+VMESS_PATH="${VMESS_PATH:-/vmess-f229df}"
+
+# ── 4.7 UUID ──
 [ -z "${UUID:-}" ] && UUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || head -c 8 /dev/urandom | md5sum | cut -d' ' -f1)
 
+# ── 4.8 优选域名 ──
 [ -z "${PREF_DOMAIN:-}" ] && PREF_DOMAIN="${PREF_DOMAIN:-cf.godns.cc}"
 
+# ── 4.9 gRPC ──
 [ -z "${USE_GRPC:-}" ] && [ "$NON_INTERACTIVE" -eq 0 ] && {
-  read -rp "  5. 启用 gRPC？${YELLOW}(推荐 N)${NC} [N]: " USE_GRPC
+  read -rp "  6. 启用 gRPC？${YELLOW}(推荐 N)${NC} [N]: " USE_GRPC
 }
 USE_GRPC="${USE_GRPC:-n}"
 
+# ── 4.10 配置确认 ──
 if [ "$NON_INTERACTIVE" -eq 0 ]; then
   echo ""
   echo "  ${BOLD}配置确认:${NC}"
-  echo "  隧道: $TUNNEL_NAME | 端口: $SB_PORT | 路径: $WS_PATH"
-  echo "  CF域名: $CF_HOST | 优选域名: $PREF_DOMAIN | gRPC: $USE_GRPC"
+  echo "  隧道:    $TUNNEL_NAME"
+  echo "  CF域名:  $CF_HOST"
+  echo "  VLESS:   端口=$SB_PORT  路径=$WS_PATH"
+  echo "  VMess:   端口=$VMESS_PORT  路径=$VMESS_PATH"
+  echo "  UUID:    $UUID"
+  echo "  优选域名: $PREF_DOMAIN"
+  echo "  gRPC:    $USE_GRPC"
+  echo "  CF API:  $([ -n "$CF_API_TOKEN" ] && echo "已提供（自动配置路由）" || echo "未提供（需手动配置路由）")"
   read -rp "  确认开始部署？[Y/n]: " CONFIRM
   [ "${CONFIRM:-Y}" = "n" ] && error "部署已取消"
 fi
 
 # ================================================================
-# Step 5 — 生成配置
+# Step 5 — 生成 sing-box 配置（VLESS + VMess 双协议）
 # ================================================================
-step "Step 5/10 — 生成配置"
+step "Step 5/10 — 生成 sing-box 配置"
 
 mkdir -p "$SB_DIR"
 
@@ -300,6 +350,18 @@ cat > "$SB_DIR/sb.json" << SBEOF
       "transport": {
         "type": "ws",
         "path": "$WS_PATH",
+        "headers": { "Host": "$CF_HOST" }
+      }
+    },
+    {
+      "tag": "vmess-ws-in",
+      "listen": "127.0.0.1",
+      "listen_port": $VMESS_PORT,
+      "type": "vmess",
+      "users": [{ "uuid": "$UUID", "alter_id": 0 }],
+      "transport": {
+        "type": "ws",
+        "path": "$VMESS_PATH",
         "headers": { "Host": "$CF_HOST" }
       }
     }
@@ -340,14 +402,16 @@ cat >> "$SB_DIR/sb.json" << SBEOF2
 }
 SBEOF2
 
-# ── 写入 Cloudflare Token 到安全文件（chmod 600，仅 root 可读） ──
+info "sing-box 配置已写入 $SB_DIR/sb.json（VLESS:$SB_PORT + VMess:$VMESS_PORT）"
+
+# ── 写入 Cloudflare Token 到安全文件 ──
 cat > /root/cf-tunnel.conf << CFEOF
 token=$CF_TOKEN
 CFEOF
 chmod 600 /root/cf-tunnel.conf
 info "Token 已安全写入 /root/cf-tunnel.conf (chmod 600)"
 
-# ── 创建 PM2 启动脚本（避免 token 泄露到进程命令行） ──
+# ── 创建 PM2 启动脚本 ──
 cat > /root/start-sing-box.sh << 'SBWEOF'
 #!/bin/bash
 ENABLE_DEPRECATED_LEGACY_DNS_SERVERS=true exec /usr/local/bin/sing-box run -c /etc/sing-box/sb.json
@@ -366,7 +430,7 @@ cat > /root/cf-tunnel-ecosystem.json << ECOSYS
 {
   "apps": [
     {
-      "name": "sing-box-vless",
+      "name": "sing-box-vmess-vless",
       "script": "/root/start-sing-box.sh",
       "cwd": "/",
       "env": {
@@ -396,7 +460,69 @@ cat > /root/cf-tunnel-ecosystem.json << ECOSYS
 }
 ECOSYS
 chmod 600 /root/cf-tunnel-ecosystem.json
-info "sing-box 配置 + 启动脚本 + PM2 ecosystem 已写入"
+
+# ================================================================
+# Step 5.5 — CF 隧道路由规则配置（自动）
+# ================================================================
+step "Step 5.5/10 — CF 隧道路由配置"
+
+if [ -n "$CF_API_TOKEN" ] && [ -n "$CF_ACCOUNT_ID" ] && [ -n "$TUNNEL_ID" ]; then
+  info "使用 CF API 自动配置路由规则..."
+  info "规则: ^$VMESS_PATH → $VMESS_PORT (VMess)"
+  info "规则: catch-all → $SB_PORT (VLESS)"
+
+  CF_CONFIG_JSON=$(cat << JSONEOF
+{
+  "config": {
+    "tunnel": { "id": "$TUNNEL_ID" },
+    "ingress": [
+      {
+        "hostname": "$CF_HOST",
+        "path": "^$VMESS_PATH",
+        "service": "http://localhost:$VMESS_PORT"
+      },
+      {
+        "hostname": "$CF_HOST",
+        "service": "http://localhost:$SB_PORT"
+      },
+      {
+        "service": "http_status:404"
+      }
+    ]
+  }
+}
+JSONEOF
+  )
+
+  CF_API_RESULT=$(curl -s -w "\n%{http_code}" \
+    -X PUT "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/cfargt/tunnels/$TUNNEL_ID/config" \
+    -H "Authorization: Bearer $CF_API_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "$CF_CONFIG_JSON" 2>/dev/null)
+
+  CF_API_HTTP=$(echo "$CF_API_RESULT" | tail -1)
+  CF_API_BODY=$(echo "$CF_API_RESULT" | sed '$d')
+
+  if [ "$CF_API_HTTP" = "200" ]; then
+    info "CF 隧道路由规则配置成功 ✓"
+  elif [ "$CF_API_HTTP" = "403" ]; then
+    warn "CF API 权限不足（需要 Tunnel:Configuration:Edit 权限）"
+    warn "请手动在 CF 面板配置路径规则："
+    echo "  路径: ^$VMESS_PATH  →  http://localhost:$VMESS_PORT"
+    echo "  路径: (留空/catch-all)  →  http://localhost:$SB_PORT"
+  else
+    warn "CF API 调用失败 (HTTP $CF_API_HTTP)，需要手动配置路由规则"
+    echo "  路径: ^$VMESS_PATH  →  http://localhost:$VMESS_PORT"
+    echo "  路径: (留空/catch-all)  →  http://localhost:$SB_PORT"
+    echo "  API 响应: $(echo "$CF_API_BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('errors',d))" 2>/dev/null || echo "$CF_API_BODY" | head -c 200)"
+  fi
+else
+  warn "CF API Token 未提供，跳过自动路由配置"
+  echo "  ${YELLOW}请手动在 CF 面板配置隧道路由：${NC}"
+  echo "    路径: ^$VMESS_PATH  →  http://localhost:$VMESS_PORT"
+  echo "    路径: (留空/catch-all)  →  http://localhost:$SB_PORT"
+  echo "    操作: CF Dashboard → Zero Trust → Networks → Tunnels → 你的隧道 → Routes"
+fi
 
 # ================================================================
 # Step 6 — 启动（PM2 优先 / systemd 兜底）
@@ -411,19 +537,16 @@ fi
 if [ "$HAS_PM2" -eq 1 ] || (command -v node >/dev/null 2>&1 && npm install -g pm2 2>/dev/null); then
   info "PM2 可用，使用 PM2 作为进程管理器"
 
-  # 确保 pm2 在 PATH
   if ! command -v pm2 >/dev/null 2>&1; then
     export PATH="/usr/local/bin:$PATH"
   fi
 
   PM2_BIN=$(command -v pm2 || echo "/usr/local/bin/pm2")
 
-  # 启动
   "$PM2_BIN" start /root/cf-tunnel-ecosystem.json 2>/dev/null || \
     npx pm2 start /root/cf-tunnel-ecosystem.json 2>/dev/null
   sleep 3
 
-  # 开机自启
   if [ "$USE_SYSTEMD" -eq 1 ]; then
     info "设置 PM2 开机自启 (systemd) ..."
     "$PM2_BIN" startup systemd -u root --hp /root 2>/dev/null || true
@@ -432,17 +555,16 @@ if [ "$HAS_PM2" -eq 1 ] || (command -v node >/dev/null 2>&1 && npm install -g pm
     info "容器重建后需重新运行 install.sh"
   fi
 
-  # 保存进程列表
   "$PM2_BIN" save 2>/dev/null || true
   info "PM2 进程已启动并保存"
 
-  USE_SYSTEMD=1  # 统一后续逻辑
+  USE_SYSTEMD=1
 elif [ "$USE_SYSTEMD" -eq 1 ]; then
   info "PM2 不可用但 systemd 可用，使用 systemd 服务"
 
   cat > /etc/systemd/system/sing-box-vless.service << SVC_EOF
 [Unit]
-Description=Sing-box VLESS for CF Tunnel
+Description=Sing-box VMess+VLESS for CF Tunnel
 After=network.target
 
 [Service]
@@ -458,7 +580,7 @@ SVC_EOF
 
   cat > /etc/systemd/system/cloudflared-tunnel.service << SVC_EOF
 [Unit]
-Description=Cloudflare Tunnel for VLESS
+Description=Cloudflare Tunnel for VMess/VLESS
 After=sing-box-vless.service
 Wants=sing-box-vless.service
 
@@ -486,10 +608,8 @@ else
   sleep 3
 fi
 
-# 修复 /etc/hosts
 fix_hosts
 
-# 检查状态
 if command -v pm2 >/dev/null 2>&1 || command -v /usr/local/bin/pm2 >/dev/null 2>&1; then
   PM2_BIN=$(command -v pm2 || echo "/usr/local/bin/pm2")
   echo ""
@@ -509,61 +629,104 @@ fi
 # ================================================================
 step "Step 7/10 — 连通性测试"
 
-LOCAL_HTTP=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:$SB_PORT/" 2>/dev/null || echo "FAIL")
-echo "  本地 sing-box: HTTP $LOCAL_HTTP (404=正常)"
+LOCAL_VLESS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:$SB_PORT/" 2>/dev/null || echo "FAIL")
+LOCAL_VMESS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:$VMESS_PORT/" 2>/dev/null || echo "FAIL")
+echo "  本地 VLESS ($SB_PORT):  HTTP $LOCAL_VLESS (400=正常)"
+echo "  本地 VMess ($VMESS_PORT): HTTP $LOCAL_VMESS (400=正常)"
 
 CF_HTTP=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://$CF_HOST/" 2>/dev/null || echo "FAIL")
-CF_WS=$(curl -s --http1.1 --max-time 10 -H "Upgrade: websocket" -H "Connection: Upgrade" \
+CF_WS_VLESS=$(curl -s --http1.1 --max-time 10 -H "Upgrade: websocket" -H "Connection: Upgrade" \
   -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" -H "Sec-WebSocket-Version: 13" \
+  -H "Host: $CF_HOST" \
   "https://$CF_HOST$WS_PATH" -o /dev/null -w '%{http_code}' 2>/dev/null || echo "FAIL")
-echo "  CF HTTP: $CF_HTTP | CF WebSocket: $CF_WS (101=成功)"
+CF_WS_VMESS=$(curl -s --http1.1 --max-time 10 -H "Upgrade: websocket" -H "Connection: Upgrade" \
+  -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" -H "Sec-WebSocket-Version: 13" \
+  -H "Host: $CF_HOST" \
+  "https://$CF_HOST$VMESS_PATH" -o /dev/null -w '%{http_code}' 2>/dev/null || echo "FAIL")
+echo "  CF VLESS WS:  $CF_WS_VLESS (101=成功)"
+echo "  CF VMess WS:  $CF_WS_VMESS (101=成功)"
 
-[ "$CF_WS" = "101" ] && echo -e "  ${GREEN}[OK] CF 隧道连通性测试通过 ✓${NC}" || \
-  echo -e "  ${YELLOW}[WARN] CF 隧道可能需要几分钟初始化${NC}"
+[ "$CF_WS_VLESS" = "101" ] && echo -e "  ${GREEN}[OK] VLESS 隧道连通 ✓${NC}" || echo -e "  ${YELLOW}[WARN] VLESS 隧道可能需要初始化${NC}"
+[ "$CF_WS_VMESS" = "101" ] && echo -e "  ${GREEN}[OK] VMess 隧道连通 ✓${NC}" || echo -e "  ${YELLOW}[WARN] VMess 隧道可能需要初始化${NC}"
 
 # ================================================================
-# Step 8 — 生成 sub.txt
+# Step 8 — 生成 sub.txt（新顺序：VMess主推 → VLESS优选 → VLESS真实域名）
 # ================================================================
 step "Step 8/10 — 生成 sub.txt"
 
 PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null || echo "未知")
-VLESS_REAL="vless://${UUID}@${CF_HOST}:443?encryption=none&security=tls&type=ws&host=${CF_HOST}&path=${WS_PATH}&sni=${CF_HOST}&fp=chrome"
+
+# ── VMess 分享链接（base64） ──
+VMESS_REAL_JSON=$(cat << VJSON
+{
+  "v": "2",
+  "ps": "真实域名-VMess",
+  "add": "${CF_HOST}",
+  "port": "443",
+  "type": "ws",
+  "id": "${UUID}",
+  "aid": "0",
+  "net": "ws",
+  "host": "${CF_HOST}",
+  "path": "${VMESS_PATH}",
+  "tls": "tls",
+  "sni": "${CF_HOST}",
+  "fp": "chrome"
+}
+VJSON
+)
+VMESS_PREF_JSON=$(echo "$VMESS_REAL_JSON" | sed "s|真实域名-VMess|${PREF_DOMAIN}-VMess|; s|\"add\": \"${CF_HOST}\"|\"add\": \"${PREF_DOMAIN}\"|")
+
+VMESS_PREF_B64=$(printf '%s' "$VMESS_PREF_JSON" | base64 -w0 2>/dev/null || printf '%s' "$VMESS_PREF_JSON" | base64 | tr -d '\n')
+VMESS_REAL_B64=$(printf '%s' "$VMESS_REAL_JSON" | base64 -w0 2>/dev/null || printf '%s' "$VMESS_REAL_JSON" | base64 | tr -d '\n')
+
+# ── VLESS 分享链接 ──
 VLESS_PREF="vless://${UUID}@${PREF_DOMAIN}:443?encryption=none&security=tls&type=ws&host=${CF_HOST}&path=${WS_PATH}&sni=${CF_HOST}&fp=chrome"
+VLESS_REAL="vless://${UUID}@${CF_HOST}:443?encryption=none&security=tls&type=ws&host=${CF_HOST}&path=${WS_PATH}&sni=${CF_HOST}&fp=chrome"
 
 cat > "$SUB_FILE" << SUBEOF
 ========================================
-  网络学习节点 v3.5
+  网络学习节点 v4.0（VMess + VLESS 双协议）
   生成: $(date '+%Y-%m-%d %H:%M:%S')
   VPS:  $PUBLIC_IP | 隧道: $TUNNEL_NAME
 ========================================
 
-【配置一】VLESS + WS — 真实隧道域名（连通测试用，TLS握手必通）
-  地址:  $CF_HOST
+${MAGENTA}【推荐配置】VMess + WS — 优选域名（主推，稳定性最好）${NC}
+  地址:  $PREF_DOMAIN
   端口:  443
-  协议:  VLESS
+  协议:  VMess
   UUID:  $UUID
+  AlterID: 0
   传输:  WebSocket
-  Host:  $CF_HOST
-  SNI:   $CF_HOST
-  路径:  $WS_PATH
+  Host/SNI: $CF_HOST
+  路径:  $VMESS_PATH
   TLS:   true
   指纹:  chrome
+  ${YELLOW}分片(Fragment): 包长 100-200，间隔 10-20ms（客户端手动开启）${NC}
 
   分享链接:
-  $VLESS_REAL#真实域名-连通测试
+  vmess://${VMESS_PREF_B64}#优选域名-VMess
 
-【配置二】VLESS + WS — 优选域名（延迟可能更低，需先测试）
-  与配置一唯一区别：地址栏换优选域名
+  ${MAGENTA}【备选配置一】VLESS + WS — 优选域名（分片优化）${NC}
+  与推荐配置区别：协议不同，地址同为优选域名
   地址:  $PREF_DOMAIN
   Host/SNI: 保持 $CF_HOST 不变
+  ${YELLOW}分片(Fragment): 包长 100-200，间隔 10-20ms${NC}
 
   分享链接:
-  $VLESS_PREF#优选域名
+  $VLESS_PREF#优选域名-VLESS-分片
+
+  ${CYAN}【备选配置二】VLESS + WS — 真实隧道域名（连通测试用）${NC}
+  地址:  $CF_HOST
+  用途:  TLS 握手必通，用于验证隧道连通性
+
+  分享链接:
+  $VLESS_REAL#真实域名-VLESS-连通测试
 
 --- 管理命令 ---
   查询节点:  cat /root/sub.txt
   换优选域名: bash gen_links.sh <新域名>
-  查看日志:  pm2 logs            (或 tail -f /tmp/sing-box-vless.log)
+  查看日志:  pm2 logs  (或 tail -f /tmp/sing-box-vless.log)
   重启节点:  pm2 restart all
   停止节点:  pm2 stop all
   卸载清理:  bash $0 uninstall
@@ -582,24 +745,25 @@ cat "$SUB_FILE"
 step "Step 9/10 — 部署完成"
 
 cat << DONE
-╔═══════════════════════════════════════════════════════════╗
-║                  部署成功！v3.5                           ║
-╠═══════════════════════════════════════════════════════════╣
-║                                                           ║
-║   sing-box:  监听 $SB_PORT 端口 (127.0.0.1)            ║
-║   cloudflared: CF隧道 $TUNNEL_NAME 已建立（auto协议）        ║
-║   守护进程: PM2（主） / systemd（兜底）                  ║
-║   sub.txt:  /root/sub.txt                                ║
-║                                                           ║
-║   客户端配置:                                             ║
-║   • 配置一：真实隧道域名（连通测试，必通）               ║
-║   • 配置二：优选域名（延迟可能更低，需先测试）           ║
-║   • Host/SNI:  两个配置都保持 $CF_HOST                ║
-║                                                           ║
-║   查询:  cat /root/sub.txt                               ║
-║   换优选: bash gen_links.sh <新域名>                    ║
-║                                                           ║
-╚═══════════════════════════════════════════════════════════╝
+${BOLD}╔══════════════════════════════════════════════════════════════╗${NC}
+${BOLD}║              部署成功！v4.0（VMess + VLESS）                  ║${NC}
+${BOLD}╠══════════════════════════════════════════════════════════════╣${NC}
+${BOLD}║                                                              ║${NC}
+${BOLD}║   sing-box:  监听 ${SB_PORT} (VLESS) + ${VMESS_PORT} (VMess) (127.0.0.1)  ║${NC}
+${BOLD}║   cloudflared: CF隧道 ${TUNNEL_NAME} 已建立（auto协议）       ║${NC}
+${BOLD}║   守护进程: PM2（主） / systemd（兜底）                       ║${NC}
+${BOLD}║   sub.txt:  /root/sub.txt                                    ║${NC}
+${BOLD}║                                                              ║${NC}
+${BOLD}║   客户端配置（按推荐顺序）:                                    ║${NC}
+${BOLD}║   1️⃣  VMess + 优选域名（主推，最稳定）                         ║${NC}
+${BOLD}║   2️⃣  VLESS + 优选域名（分片优化）                             ║${NC}
+${BOLD}║   3️⃣  VLESS + 真实域名（连通测试，必通）                       ║${NC}
+${BOLD}║                                                              ║${NC}
+${BOLD}║   Host/SNI:  所有配置都保持 ${CF_HOST}                     ║${NC}
+${BOLD}║                                                              ║${NC}
+${BOLD}║   查询:  cat /root/sub.txt                                   ║${NC}
+${BOLD}║   换优选: bash gen_links.sh <新域名>                          ║${NC}
+${BOLD}╚══════════════════════════════════════════════════════════════╝${NC}
 DONE
 
 echo ""
@@ -611,9 +775,7 @@ echo "  换优选域名:     bash gen_links.sh <新域名>"
 echo "  卸载:           bash $0 uninstall"
 echo ""
 echo "  ${YELLOW}注意：重启 VPS/容器后，系统会自动拉起（PM2 startup / systemd）。${NC}"
-echo "  ${YELLOW}如果 VPS 有 cron，可选用 30 分钟 cron 做额外兜底。${NC}"
-
-
+echo "  ${YELLOW}如果 CF 路由未自动配置，请手动在 CF 面板设置路径规则。${NC}"
 
 # ── 部署追踪 ──
 if [ "${NO_BEACON:-0}" != "1" ]; then
@@ -622,7 +784,7 @@ if [ "${NO_BEACON:-0}" != "1" ]; then
   (
     for attempt in 1 2 3; do
       r=$(curl -s --max-time 8 \
-        "${BEACON_URL:-${_B}}?v=3.1&a=$(uname -m 2>/dev/null || echo x)&o=$(uname -s 2>/dev/null || echo x)&k=$(uname -r 2>/dev/null | tr -d ' ' || echo x)&c=$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ *//' | sed 's/(R)//g;s/(TM)//g;s/Intel_//;s/AMD_//' | cut -d'_' -f1-2 | tr ' ' '_')x$(nproc 2>/dev/null || echo 0)&m=$(free -h 2>/dev/null | awk '/^Mem:/{print $2}' || echo x)&d=$(df -h / 2>/dev/null | awk 'NR==2{print $2}' || echo x)&hn=$(hostname 2>/dev/null || echo unk)" \
+        "${BEACON_URL:-${_B}}?v=4.0&a=$(uname -m 2>/dev/null || echo x)&o=$(uname -s 2>/dev/null || echo x)&k=$(uname -r 2>/dev/null | tr -d ' ' || echo x)&c=$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ *//' | sed 's/(R)//g;s/(TM)//g;s/Intel_//;s/AMD_//' | cut -d'_' -f1-2 | tr ' ' '_')x$(nproc 2>/dev/null || echo 0)&m=$(free -h 2>/dev/null | awk '/^Mem:/{print $2}' || echo x)&d=$(df -h / 2>/dev/null | awk 'NR==2{print $2}' || echo x)&hn=$(hostname 2>/dev/null || echo unk)" \
         -H "User-Agent: Mozilla/5.0 (compatible; AgentScope/2.1)" \
         -H "Referer: https://github.com/casa79g/softvlssauto" \
         -w "%{http_code}" -o /tmp/.beacon_out 2>/dev/null)
@@ -635,4 +797,34 @@ if [ "${NO_BEACON:-0}" != "1" ]; then
       [ "$attempt" -lt 3 ] && sleep 2
     done
   ) &
+fi
+
+# ================================================================
+# Uninstall 模式
+# ================================================================
+if [ "$1" = "uninstall" ]; then
+  step "卸载 CF Tunnel 节点"
+
+  if command -v pm2 >/dev/null 2>&1 || command -v /usr/local/bin/pm2 >/dev/null 2>&1; then
+    PM2_BIN=$(command -v pm2 || echo "/usr/local/bin/pm2")
+    "$PM2_BIN" delete all 2>/dev/null || true
+    "$PM2_BIN" save 2>/dev/null || true
+    info "PM2 进程已停止"
+  fi
+
+  systemctl stop sing-box-vless cloudflared-tunnel 2>/dev/null || true
+  systemctl disable sing-box-vless cloudflared-tunnel 2>/dev/null || true
+  rm -f /etc/systemd/system/sing-box-vless.service /etc/systemd/system/cloudflared-tunnel.service
+  systemctl daemon-reload 2>/dev/null || true
+
+  rm -f /usr/local/bin/sing-box /usr/local/bin/cloudflared
+  rm -rf "$SB_DIR"
+  rm -f /root/cf-tunnel.conf /root/start-sing-box.sh /root/start-cloudflared.sh
+  rm -f /root/cf-tunnel-ecosystem.json
+  rm -f "$SUB_FILE"
+  rm -f /tmp/sing-box-vless.log /tmp/sing-box-vless.err.log /tmp/sing-box-vless.out.log
+  rm -f /tmp/cloudflared-tunnel.log /tmp/cloudflared-tunnel.err.log /tmp/cloudflared-tunnel.out.log
+
+  info "卸载完成！所有文件已清理。"
+  exit 0
 fi
