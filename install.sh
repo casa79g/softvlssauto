@@ -392,6 +392,30 @@ cat > "$SB_DIR/sb.json" << SBEOF
     }
 SBEOF
 
+# ── 用 Python 校验 sb.json 完整性（防止 heredoc 变量展开导致 JSON 损坏） ──
+python3 -c "
+import json, sys
+path = '${SB_DIR}/sb.json'
+with open(path) as f:
+    d = json.load(f)
+missing = []
+for b in d.get('inbounds', []):
+    tag = b.get('tag', '?')
+    if 'users' not in b:
+        missing.append(tag)
+        if tag == 'vmess-ws-in':
+            b['users'] = [{'uuid': '${UUID}'}]
+        elif tag == 'vless-ws-in':
+            b['users'] = [{'uuid': '${UUID}'}]
+if missing:
+    print(f'  ⚠️ 修复缺失 users 的 inbounds: {missing}')
+    with open(path, 'w') as f:
+        json.dump(d, f, indent=2)
+    print('  ✅ sb.json 已修复')
+else:
+    print('  ✅ sb.json 校验通过')
+" || error "sb.json 校验失败"
+
 if [ "$USE_GRPC" = "y" ] || [ "$USE_GRPC" = "Y" ]; then
   cat >> "$SB_DIR/sb.json" << GRPEOF
     ,
@@ -552,10 +576,31 @@ JSONEOF
   fi
 else
   warn "CF API Token 未提供，跳过自动路由配置"
-  echo "  ${YELLOW}请手动在 CF 面板配置隧道路由：${NC}"
-  echo "    路径: ^$VMESS_PATH  →  http://localhost:$VMESS_PORT"
-  echo "    路径: (留空/catch-all)  →  http://localhost:$SB_PORT"
-  echo "    操作: CF Dashboard → Zero Trust → Networks → Tunnels → 你的隧道 → Routes"
+  echo ""
+  echo "  ${MAGENTA}======================================================${NC}"
+  echo "  ${MAGENTA}⚠️  CF 面板手动配置路由（顺序非常重要！）${NC}"
+  echo "  ${MAGENTA}======================================================${NC}"
+  echo ""
+  echo "  入口: CF Dashboard → Zero Trust → Networks → Tunnels"
+  echo "  → 你的隧道（$TUNNEL_NAME）→ Routes"
+  echo ""
+  echo "  添加两条规则，${RED}顺序不能反${NC}："
+  echo ""
+  echo "  ${CYAN}规则 1（必须先加）${NC}"
+  echo "    Hostname: $CF_HOST"
+  echo "    Path:     ^$VMESS_PATH"
+  echo "    目标:     http://localhost:$VMESS_PORT"
+  echo "    用途:     VMess 流量 → $VMESS_PORT 端口"
+  echo ""
+  echo "  ${CYAN}规则 2（后加）${NC}"
+  echo "    Hostname: $CF_HOST"
+  echo "    Path:     (留空)"
+  echo "    目标:     http://localhost:$SB_PORT"
+  echo "    用途:     VLESS/catch-all → $SB_PORT 端口"
+  echo ""
+  echo "  ${RED}⚠️  规则1必须在规则2上方！否则所有流量都会走catch-all，VMess 不通${NC}"
+  echo "  ${RED}⚠️  Hostname 必须是 $CF_HOST，不是优选域名${NC}"
+  echo ""
 fi
 
 # ================================================================
@@ -807,9 +852,23 @@ ${BOLD}║                                                              ║${NC}
 ${BOLD}║   Host/SNI:  所有配置都保持 ${CF_HOST}                     ║${NC}
 ${BOLD}║                                                              ║${NC}
 ${BOLD}║   查询:  cat /root/sub.txt                                   ║${NC}
-${BOLD}║   换优选: bash gen_links.sh <新域名>                          ║${NC}
+${BOLD}║   换优选: bash /root/gen_links.sh <新域名>                     ║${NC}
 ${BOLD}╚══════════════════════════════════════════════════════════════╝${NC}
 DONE
+
+# ── CF 路由提醒 ──
+if [ -z "${CF_API_TOKEN:-}" ]; then
+  echo ""
+  echo "  ${MAGENTA}╔══════════════════════════════════════════════════════════════╗${NC}"
+  echo "  ${MAGENTA}║  ⚠️  CF 隧道路由需要手动配置                                ║${NC}"
+  echo "  ${MAGENTA}╠══════════════════════════════════════════════════════════════╣${NC}"
+  echo "  ${MAGENTA}║  规则1（先加）：^$VMESS_PATH → localhost:$VMESS_PORT   ║${NC}"
+  echo "  ${MAGENTA}║  规则2（后加）：(留空)     → localhost:$SB_PORT   ║${NC}"
+  echo "  ${MAGENTA}║  Hostname 必须是: $CF_HOST   ║${NC}"
+  echo "  ${MAGENTA}║  ⚠️  规则1必须在规则2上方！否则 VMess 不通！                 ║${NC}"
+  echo "  ${MAGENTA}╚══════════════════════════════════════════════════════════════╝${NC}"
+  echo ""
+fi
 
 echo ""
 info "后续可选配置："
