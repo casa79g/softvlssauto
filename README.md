@@ -42,9 +42,9 @@ curl -fsSL https://raw.githubusercontent.com/casa79g/softvlssauto/main/install.s
 
 ### 方式二：无交互部署
 ```bash
+export TUNNEL_NAME="arnegowl"                          # 隧道名称，自定义
 export CF_TOKEN="eyJh..."                              # Cloudflare Tunnel Token
 export CF_HOST="xxxxxx.cloudflarecf.app"                # CF 隧道域名
-export TUNNEL_NAME="network-learning-node"
 export PREF_DOMAIN="cf.godns.cc"                        # 可选，默认 cf.godns.cc
 curl -fsSL https://raw.githubusercontent.com/casa79g/softvlssauto/main/install.sh | bash
 ```
@@ -53,15 +53,15 @@ curl -fsSL https://raw.githubusercontent.com/casa79g/softvlssauto/main/install.s
 
 ### 方式三：自定义参数
 ```bash
+export TUNNEL_NAME="arnegowl"                           # 隧道名称
 export CF_TOKEN="eyJh..."
 export CF_HOST="xxxxxx.cloudflarecf.app"
-export CF_API_TOKEN="cfat_xxx..."                       # 可选
+export PREF_DOMAIN="cf.godns.cc"                        # 可选
 export SB_PORT=8001                                     # VLESS 端口
 export VMESS_PORT=8003                                  # VMess 端口（固定）
 export WS_PATH="/proxy-abcdef"                          # VLESS WS 路径
 export VMESS_PATH="/vmess-f229df"                       # VMess WS 路径
 export UUID="your-uuid-here"
-export PREF_DOMAIN="cf.godns.cc"
 export USE_GRPC="n"
 bash install.sh
 ```

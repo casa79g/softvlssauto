@@ -274,9 +274,10 @@ step "Step 4/10 — 参数配置"
 
 # ── 4.1 隧道名称 ──
 [ -z "${TUNNEL_NAME:-}" ] && [ "$NON_INTERACTIVE" -eq 0 ] && {
-  read -rp "  1. 隧道名称: [network-learning-node]" TUNNEL_NAME
+  echo "  ${YELLOW}隧道名称用于在 CF 面板中标识，请自定义（建议简短有意义）${NC}"
+  read -rp "  1. 隧道名称: " TUNNEL_NAME
 }
-TUNNEL_NAME="${TUNNEL_NAME:-network-learning-node}"
+[ -z "$TUNNEL_NAME" ] && error "隧道名称不能为空"
 
 # ── 4.2 隧道 Token（eyJh...） ──
 [ -z "${CF_TOKEN:-}" ] && [ "$NON_INTERACTIVE" -eq 0 ] && {
