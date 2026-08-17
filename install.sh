@@ -17,6 +17,37 @@ step()  { echo -e "\n${BOLD}━━━━━━━━━━━━━━━━━�
 [ "$(id -u)" -ne 0 ] && error "请使用 root 权限运行"
 
 # ================================================================
+# Uninstall 模式 — 必须在最前面，否则脚本会继续执行全部安装步骤
+# ================================================================
+if [ "${1:-}" = "uninstall" ]; then
+  step "卸载 CF Tunnel 节点"
+
+  if command -v pm2 >/dev/null 2>&1 || command -v /usr/local/bin/pm2 >/dev/null 2>&1; then
+    PM2_BIN=$(command -v pm2 || echo "/usr/local/bin/pm2")
+    "$PM2_BIN" delete all 2>/dev/null || true
+    "$PM2_BIN" save 2>/dev/null || true
+    info "PM2 进程已停止"
+  fi
+
+  systemctl stop sing-box-vless cloudflared-tunnel 2>/dev/null || true
+  systemctl disable sing-box-vless cloudflared-tunnel 2>/dev/null || true
+  rm -f /etc/systemd/system/sing-box-vless.service /etc/systemd/system/cloudflared-tunnel.service
+  systemctl daemon-reload 2>/dev/null || true
+
+  rm -f /usr/local/bin/sing-box /usr/local/bin/cloudflared
+  rm -rf /etc/sing-box
+  rm -f /root/cf-tunnel.conf /root/start-sing-box.sh /root/start-cloudflared.sh
+  rm -f /root/cf-tunnel-ecosystem.json
+  rm -f /root/gen_links.sh /root/query.sh /root/uninstall.sh
+  rm -f /root/sub.txt
+  rm -f /tmp/sing-box-vless.log /tmp/sing-box-vless.err.log /tmp/sing-box-vless.out.log
+  rm -f /tmp/cloudflared-tunnel.log /tmp/cloudflared-tunnel.err.log /tmp/cloudflared-tunnel.out.log
+
+  info "卸载完成！所有文件已清理。"
+  exit 0
+fi
+
+# ================================================================
 # 目录自愈：修正 git clone 嵌套问题
 # ================================================================
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
@@ -806,35 +837,4 @@ if [ "${NO_BEACON:-0}" != "1" ]; then
       [ "$attempt" -lt 3 ] && sleep 2
     done
   ) &
-fi
-
-# ================================================================
-# Uninstall 模式
-# ================================================================
-if [ "$1" = "uninstall" ]; then
-  step "卸载 CF Tunnel 节点"
-
-  if command -v pm2 >/dev/null 2>&1 || command -v /usr/local/bin/pm2 >/dev/null 2>&1; then
-    PM2_BIN=$(command -v pm2 || echo "/usr/local/bin/pm2")
-    "$PM2_BIN" delete all 2>/dev/null || true
-    "$PM2_BIN" save 2>/dev/null || true
-    info "PM2 进程已停止"
-  fi
-
-  systemctl stop sing-box-vless cloudflared-tunnel 2>/dev/null || true
-  systemctl disable sing-box-vless cloudflared-tunnel 2>/dev/null || true
-  rm -f /etc/systemd/system/sing-box-vless.service /etc/systemd/system/cloudflared-tunnel.service
-  systemctl daemon-reload 2>/dev/null || true
-
-  rm -f /usr/local/bin/sing-box /usr/local/bin/cloudflared
-  rm -rf "$SB_DIR"
-  rm -f /root/cf-tunnel.conf /root/start-sing-box.sh /root/start-cloudflared.sh
-  rm -f /root/cf-tunnel-ecosystem.json
-  rm -f /root/gen_links.sh /root/query.sh /root/uninstall.sh
-  rm -f "$SUB_FILE"
-  rm -f /tmp/sing-box-vless.log /tmp/sing-box-vless.err.log /tmp/sing-box-vless.out.log
-  rm -f /tmp/cloudflared-tunnel.log /tmp/cloudflared-tunnel.err.log /tmp/cloudflared-tunnel.out.log
-
-  info "卸载完成！所有文件已清理。"
-  exit 0
 fi
