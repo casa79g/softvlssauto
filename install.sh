@@ -461,6 +461,15 @@ cat > /root/cf-tunnel-ecosystem.json << ECOSYS
 ECOSYS
 chmod 600 /root/cf-tunnel-ecosystem.json
 
+# ── 拷贝管理脚本到 /root/（方便任意目录调用） ──
+for _tool in gen_links.sh query.sh uninstall.sh; do
+  if [ -f "${SELF_DIR}/$_tool" ]; then
+    cp "${SELF_DIR}/$_tool" "/root/$_tool"
+    chmod +x "/root/$_tool"
+  fi
+done
+info "管理脚本已拷贝至 /root/（gen_links.sh / query.sh / uninstall.sh）"
+
 # ================================================================
 # Step 5.5 — CF 隧道路由规则配置（自动）
 # ================================================================
@@ -725,11 +734,11 @@ ${MAGENTA}【推荐配置】VMess + WS — 优选域名（主推，稳定性最�
 
 --- 管理命令 ---
   查询节点:  cat /root/sub.txt
-  换优选域名: bash gen_links.sh <新域名>
+  换优选域名: bash /root/gen_links.sh <新域名>
   查看日志:  pm2 logs  (或 tail -f /tmp/sing-box-vless.log)
   重启节点:  pm2 restart all
   停止节点:  pm2 stop all
-  卸载清理:  bash $0 uninstall
+  卸载清理:  bash /root/uninstall.sh  (或 bash install.sh uninstall)
 
 ========================================
 SUBEOF
@@ -771,8 +780,8 @@ info "后续可选配置："
 echo "  查看 PM2 状态:  pm2 list"
 echo "  实时日志:       pm2 logs"
 echo "  重启服务:       pm2 restart all"
-echo "  换优选域名:     bash gen_links.sh <新域名>"
-echo "  卸载:           bash $0 uninstall"
+echo "  换优选域名:     bash /root/gen_links.sh <新域名>"
+echo "  卸载:           bash /root/uninstall.sh"
 echo ""
 echo "  ${YELLOW}注意：重启 VPS/容器后，系统会自动拉起（PM2 startup / systemd）。${NC}"
 echo "  ${YELLOW}如果 CF 路由未自动配置，请手动在 CF 面板设置路径规则。${NC}"
@@ -821,6 +830,7 @@ if [ "$1" = "uninstall" ]; then
   rm -rf "$SB_DIR"
   rm -f /root/cf-tunnel.conf /root/start-sing-box.sh /root/start-cloudflared.sh
   rm -f /root/cf-tunnel-ecosystem.json
+  rm -f /root/gen_links.sh /root/query.sh /root/uninstall.sh
   rm -f "$SUB_FILE"
   rm -f /tmp/sing-box-vless.log /tmp/sing-box-vless.err.log /tmp/sing-box-vless.out.log
   rm -f /tmp/cloudflared-tunnel.log /tmp/cloudflared-tunnel.err.log /tmp/cloudflared-tunnel.out.log

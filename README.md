@@ -125,8 +125,11 @@ pm2 restart all           # 重启所有服务
 pm2 stop all              # 停止所有服务
 pm2 save                  # 保存进程列表
 cat /root/sub.txt         # 查看分享链接
-bash gen_links.sh <新域名> # 切换优选域名
+bash /root/gen_links.sh <新域名>  # 切换优选域名
+bash /root/uninstall.sh        # 卸载（或 bash install.sh uninstall）
 ```
+
+> **注**：`gen_links.sh`、`query.sh`、`uninstall.sh` 安装时自动拷贝至 `/root/`，可从任意目录调用。
 
 ## 🔍 连通性检查
 
