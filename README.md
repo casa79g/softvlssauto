@@ -42,7 +42,7 @@ curl -fsSL https://raw.githubusercontent.com/casa79g/softvlssauto/main/install.s
 
 ### 方式二：无交互部署
 ```bash
-export TUNNEL_NAME="arnegowl"                          # 隧道名称，自定义
+export TUNNEL_NAME="your-tunnel-name"                   # 隧道名称，自定义
 export CF_TOKEN="eyJh..."                              # Cloudflare Tunnel Token
 export CF_HOST="xxxxxx.cloudflarecf.app"                # CF 隧道域名
 export PREF_DOMAIN="cf.godns.cc"                        # 可选，默认 cf.godns.cc
