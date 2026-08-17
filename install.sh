@@ -383,7 +383,7 @@ cat > "$SB_DIR/sb.json" << SBEOF
       "listen": "127.0.0.1",
       "listen_port": $VMESS_PORT,
       "type": "vmess",
-      "users": [{ "uuid": "$UUID", "alter_id": 0 }],
+      "users": [{ "uuid": "$UUID" }],
       "transport": {
         "type": "ws",
         "path": "$VMESS_PATH",
@@ -742,7 +742,6 @@ ${MAGENTA}【推荐配置】VMess + WS — 优选域名（主推，稳定性最�
   端口:  443
   协议:  VMess
   UUID:  $UUID
-  AlterID: 0
   传输:  WebSocket
   Host/SNI: $CF_HOST
   路径:  $VMESS_PATH

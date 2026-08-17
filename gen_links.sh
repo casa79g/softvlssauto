@@ -69,7 +69,6 @@ cat > "$SUB_FILE" << EOF
   端口:  443
   协议:  VMess
   UUID:  $UUID
-  AlterID: 0
   传输:  WebSocket
   Host/SNI: $CF_HOST
   路径:  $VMESS_PATH
