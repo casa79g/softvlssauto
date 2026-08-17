@@ -128,13 +128,19 @@ cat /root/sub.txt         # 查看分享链接
 bash gen_links.sh <新域名> # 切换优选域名
 ```
 
-## 🔍 诊断
+## 🔍 连通性检查
 
 ```bash
-bash query.sh          # 检查节点状态、PM2 进程、日志、连通性
-curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8001/    # VLESS 本地 (400=正常)
-curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8003/    # VMess 本地 (400=正常)
+bash query.sh          # 检查节点状态、PM2 进程、端口监听、回环测试
+cat /root/sub.txt      # 查看分享链接和节点配置
 ```
+
+`query.sh` 会检查：
+- PM2 进程状态（sing-box + cloudflared）
+- 端口监听（8001 VLESS / 8003 VMess / 8002 gRPC）
+- 本地回环 HTTP 响应（400/404=正常）
+- /etc/hosts IPv6 问题
+- 配置文件权限
 
 ## ⚡ 快速测速（检测 VPS 真实带宽）
 

@@ -65,8 +65,12 @@ else
 fi
 echo -e "  └─────────────────────────────────────────────────────┘"
 
+# ============================================================
+# v2.2 更新：增加 8003 (VMess) 端口检查 + 双端口回环测试
+# ============================================================
+
 echo -e "\n  ┌─── 端口监听检查 ──────────────────────────────────┐"
-for P in 8001 8002 8080; do
+for P in 8001 8002 8003 8080; do
     if ss -tlnp "sport = :$P" 2>/dev/null | grep -q "."; then
         PID=$(ss -tlnp "sport = :$P" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | head -1 || true)
         CMD=$(cat /proc/"${PID:-0}"/cmdline 2>/dev/null | tr '\0' ' ' | cut -c1-40 || echo "")
@@ -78,11 +82,11 @@ done
 echo -e "  └─────────────────────────────────────────────────────┘"
 
 echo -e "\n  ┌─── 本地回环测试 ──────────────────────────────────┐"
-SB_PORT=$(grep listen_port "$SB_CONF" 2>/dev/null | head -1 | sed 's/.*: //')
-if [ -n "$SB_PORT" ]; then
-    R=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:$SB_PORT/" 2>/dev/null || echo "FAIL")
-    echo -e "  │ 127.0.0.1:$SB_PORT → HTTP $R (404=正常)"
-fi
+for P in 8001 8003; do
+    R=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:$P/" 2>/dev/null || echo "FAIL")
+    PROTO="$([ "$P" = "8001" ] && echo "VLESS" || echo "VMess")"
+    echo -e "  │ 127.0.0.1:$P ($PROTO) → HTTP $R (400/404=正常)"
+done
 echo -e "  └─────────────────────────────────────────────────────┘"
 
 echo -e "\n  ┌─── 配置文件权限 ──────────────────────────────────┐"
