@@ -334,7 +334,6 @@ info "Token 已安全写入 /root/cf-tunnel.conf (chmod 600)"
 # ── 创建 PM2 启动脚本（避免 token 泄露到进程命令行） ──
 cat > /root/start-sing-box.sh << 'SBWEOF'
 #!/bin/bash
-CF_TOKEN="$(cat /root/cf-tunnel.conf | cut -d= -f2)"
 ENABLE_DEPRECATED_LEGACY_DNS_SERVERS=true exec /usr/local/bin/sing-box run -c /etc/sing-box/sb.json
 SBWEOF
 chmod +x /root/start-sing-box.sh
@@ -342,7 +341,7 @@ chmod +x /root/start-sing-box.sh
 cat > /root/start-cloudflared.sh << 'CFWEOF'
 #!/bin/bash
 CF_TOKEN="$(cat /root/cf-tunnel.conf | cut -d= -f2)"
-exec /usr/local/bin/cloudflared tunnel run --token "$CF_TOKEN" --protocol http2
+exec /usr/local/bin/cloudflared tunnel run --token "$CF_TOKEN" --protocol h2c
 CFWEOF
 chmod +x /root/start-cloudflared.sh
 
@@ -512,17 +511,18 @@ echo "  CF HTTP: $CF_HTTP | CF WebSocket: $CF_WS (101=成功)"
 step "Step 8/10 — 生成 sub.txt"
 
 PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null || echo "未知")
-VLESS_URL="vless://${UUID}@${PREF_DOMAIN}:443?encryption=none&security=tls&type=ws&host=${CF_HOST}&path=${WS_PATH}&sni=${CF_HOST}&fp=chrome"
+VLESS_REAL="vless://${UUID}@${CF_HOST}:443?encryption=none&security=tls&type=ws&host=${CF_HOST}&path=${WS_PATH}&sni=${CF_HOST}&fp=chrome"
+VLESS_PREF="vless://${UUID}@${PREF_DOMAIN}:443?encryption=none&security=tls&type=ws&host=${CF_HOST}&path=${WS_PATH}&sni=${CF_HOST}&fp=chrome"
 
 cat > "$SUB_FILE" << SUBEOF
 ========================================
-  VLESS Tunnel Deploy Toolkit v3.3
+  网络学习节点 v3.5
   生成: $(date '+%Y-%m-%d %H:%M:%S')
   VPS:  $PUBLIC_IP | 隧道: $TUNNEL_NAME
 ========================================
 
-【配置一】VLESS + WS（无分片，直接粘贴）
-  地址:  $PREF_DOMAIN
+【配置一】VLESS + WS — 真实隧道域名（连通测试用，TLS握手必通）
+  地址:  $CF_HOST
   端口:  443
   协议:  VLESS
   UUID:  $UUID
@@ -534,14 +534,15 @@ cat > "$SUB_FILE" << SUBEOF
   指纹:  chrome
 
   分享链接:
-  $VLESS_URL#配置一-无分片
+  $VLESS_REAL#真实域名-连通测试
 
-【配置二】VLESS + WS（需开启 Fragment 分片）
-  与配置一相同，在客户端节点设置中开启:
-  分片: tlshello 100-200 / 10-20ms
+【配置二】VLESS + WS — 优选域名（延迟可能更低，需先测试）
+  与配置一唯一区别：地址栏换优选域名
+  地址:  $PREF_DOMAIN
+  Host/SNI: 保持 $CF_HOST 不变
 
   分享链接:
-  $VLESS_URL#配置二-分片
+  $VLESS_PREF#优选域名
 
 --- 管理命令 ---
   查询节点:  cat /root/sub.txt
@@ -566,23 +567,21 @@ step "Step 9/10 — 部署完成"
 
 cat << DONE
 ╔═══════════════════════════════════════════════════════════╗
-║                  部署成功！v3.3                           ║
+║                  部署成功！v3.5                           ║
 ╠═══════════════════════════════════════════════════════════╣
 ║                                                           ║
 ║   sing-box:  监听 $SB_PORT 端口 (127.0.0.1)            ║
-║   cloudflared: CF隧道 $TUNNEL_NAME 已建立               ║
+║   cloudflared: CF隧道 $TUNNEL_NAME (h2c) 已建立        ║
 ║   守护进程: PM2（主） / systemd（兜底）                  ║
 ║   sub.txt:  /root/sub.txt                                ║
 ║                                                           ║
 ║   客户端配置:                                             ║
-║   • V2RayN / Karing: 粘贴上方分享链接                    ║
-║   • CF优选域名:  填入地址栏                               ║
-║   • Host/SNI:    保持 $CF_HOST 不变          ║
-║   • 分片:        如需请开启 Fragment                       ║
+║   • 配置一：真实隧道域名（连通测试，必通）               ║
+║   • 配置二：优选域名（延迟可能更低，需先测试）           ║
+║   • Host/SNI:  两个配置都保持 $CF_HOST                ║
 ║                                                           ║
 ║   查询:  cat /root/sub.txt                               ║
-║   日志:  pm2 logs                                        ║
-║   重启:  pm2 restart all                                 ║
+║   换优选: bash gen_links.sh <新域名>                    ║
 ║                                                           ║
 ╚═══════════════════════════════════════════════════════════╝
 DONE
