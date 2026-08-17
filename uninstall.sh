@@ -13,6 +13,14 @@ read -rp "确认卸载？此操作不可恢复 [Y/n]: " CONFIRM
 
 echo ""
 
+# ── 先杀所有残留进程 ──
+echo "[0/7] 停止所有残留进程..."
+pkill -9 -f "sing-box" 2>/dev/null || true
+pkill -9 -f "cloudflared" 2>/dev/null || true
+pkill -9 -f "start-sing-box" 2>/dev/null || true
+pkill -9 -f "start-cloudflared" 2>/dev/null || true
+sleep 1
+
 # ── 停止所有进程 ──
 echo "[1/7] 停止 PM2 进程..."
 if command -v pm2 >/dev/null 2>&1 || [ -f /usr/local/bin/pm2 ]; then

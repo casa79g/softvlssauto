@@ -93,7 +93,19 @@ done
 # ================================================================
 step "Step 2/10 — 端口扫描"
 
-scan_port() { ss -tlnp "sport = :$1" 2>/dev/null | grep -qE 'pid=[0-9]+'; }
+scan_port() {
+  ss -tln state listening 2>/dev/null | awk -v p=":$1 " '$4 ~ p && $4 !~ p".* "' | grep -q .
+}
+port_pid() {
+  ss -tln state listening 2>/dev/null | awk -v p=":$1 " '$4 ~ p && $4 !~ p".* "' | grep -o 'pid=[0-9]*' | cut -d= -f2 | head -1
+}
+port_cmd() {
+  local _p
+  for _p in $(port_pid "$1"); do
+    cat /proc/"$_p"/cmdline 2>/dev/null | tr '\0' ' ' | sed 's/ /_/g' | cut -c1-20
+    [ -n "$_p" ] && break
+  done
+}
 SUGGEST_PORT=""
 for PORT in 8001 8002 8080 8443 3000; do
   if ! scan_port "$PORT"; then SUGGEST_PORT="$PORT"; break; fi
@@ -105,8 +117,8 @@ printf "  ${BOLD}│  端口    │ 状态   │ 占用进程            │${NC
 printf "  ${BOLD}├──────────┼────────┼──────────────────────┤${NC}\n"
 for PORT in 80 443 8001 8002 8080 8443 3000; do
   if scan_port "$PORT"; then
-    PID=$(ss -tlnp "sport = :$PORT" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | head -1 || true)
-    CMD=$(cat /proc/"${PID:-0}"/cmdline 2>/dev/null | tr '\0' ' ' | sed 's/ /_/g' | cut -c1-20 || echo "")
+    PID=$(port_pid "$PORT")
+    CMD=$(port_cmd "$PORT")
     STATUS="${RED}已占用${NC}"; EXTRA="${PID:-?} ${CMD}"
   else
     STATUS="${GREEN}空闲${NC}"; EXTRA=""
@@ -116,8 +128,10 @@ done
 printf "  ${BOLD}└──────────┴────────┴──────────────────────┘${NC}\n"
 
 kill_port() {
-  local pid=$(ss -tlnp "sport = :$1" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | head -1 || true)
-  [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null && sleep 1 && return 0
+  local _pid
+  for _pid in $(port_pid "$1"); do
+    [ -n "$_pid" ] && kill -9 "$_pid" 2>/dev/null && sleep 1 && return 0
+  done
   return 1
 }
 
