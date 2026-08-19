@@ -1,8 +1,9 @@
 #!/bin/bash
 # ============================================================
-# CF Tunnel + VMess/VLESS 自动部署脚本 v4.0
+# CF Tunnel + VMess/VLESS 自动部署脚本 v4.1
 # 协议：主推 VMess+优选域名 / 辅出 VLESS+优选域名(分片) / VLESS+真实域名
-# 守护架构：PM2（主） + systemd（容器兜底） + cron（可选）
+# 守护架构：PM2（主） + systemd（容器兜底） + 非systemd自启（容器/沙箱）
+#           + 隧道探活自愈（进程活但连接断也会自动重启）
 # ============================================================
 set -uo pipefail
 
@@ -38,6 +39,11 @@ if [ "${1:-}" = "uninstall" ]; then
   rm -rf /etc/sing-box
   rm -f /root/cf-tunnel.conf /root/start-sing-box.sh /root/start-cloudflared.sh
   rm -f /root/cf-tunnel-ecosystem.json
+  rm -f /root/auto-start-tunnel.sh /root/tunnel-probe.sh
+  rm -f /etc/profile.d/99-tunnel-selfheal.sh
+  if command -v crontab >/dev/null 2>&1; then
+    crontab -l 2>/dev/null | grep -vE "auto-start-tunnel|tunnel-probe" | crontab - 2>/dev/null || true
+  fi
   rm -f /root/gen_links.sh /root/query.sh /root/uninstall.sh
   rm -f /root/sub.txt
   rm -f /tmp/sing-box-vless.log /tmp/sing-box-vless.err.log /tmp/sing-box-vless.out.log
@@ -643,12 +649,75 @@ if [ "$PM2_OK" -eq 1 ]; then
     info "设置 PM2 开机自启 (systemd) ..."
     "$PM2_BIN" startup systemd -u root --hp /root 2>/dev/null || true
   else
-    info "容器环境，跳过开机自启（systemd 不可用）"
-    info "容器重建后需重新运行 install.sh"
+    info "容器环境（无 systemd），注册非 systemd 自启 ..."
+
+    # ── 通用自启脚本：等外网通 → PM2 resurrect（幂等，进程在则自动跳过） ──
+    cat > /root/auto-start-tunnel.sh << 'ASTEOF'
+#!/bin/bash
+# 容器/无 systemd 环境自启：等外网通 → PM2 resurrect（幂等）
+for i in $(seq 1 20); do
+  curl -m 3 -o /dev/null -s https://www.cloudflare.com && break
+  sleep 2
+done
+PM2_BIN=$(command -v pm2 2>/dev/null || echo /usr/local/bin/pm2)
+if command -v "$PM2_BIN" >/dev/null 2>&1; then
+  "$PM2_BIN" resurrect 2>/dev/null || "$PM2_BIN" start /root/cf-tunnel-ecosystem.json
+fi
+ASTEOF
+    chmod +x /root/auto-start-tunnel.sh
+
+    # ── 1) cron @reboot（sysvinit/rc 体系容器，开机链路会拉起 cron） ──
+    if command -v crontab >/dev/null 2>&1; then
+      ( crontab -l 2>/dev/null | grep -v auto-start-tunnel; \
+        echo "@reboot /root/auto-start-tunnel.sh" ) | crontab - 2>/dev/null && \
+        info "已注册 cron @reboot 自启"
+    fi
+
+    # ── 2) rc.local（若存在） ──
+    if [ -f /etc/rc.local ]; then
+      grep -q auto-start-tunnel /etc/rc.local || \
+        sed -i '/^exit 0/i /root/auto-start-tunnel.sh' /etc/rc.local 2>/dev/null
+      info "已注册 rc.local 自启"
+    fi
+
+    # ── 3) profile.d 登录钩子兜底（任何登录 shell 都会检查拉起） ──
+    cat > /etc/profile.d/99-tunnel-selfheal.sh << 'PEOF'
+#!/bin/bash
+# 登录即检查：cloudflared 不在则自动拉起（容器/无 systemd 环境兜底）
+if ! pgrep -f "cloudflared tunnel run" >/dev/null 2>&1; then
+  [ -x /root/auto-start-tunnel.sh ] && /root/auto-start-tunnel.sh &
+fi
+PEOF
+    chmod 644 /etc/profile.d/99-tunnel-selfheal.sh 2>/dev/null || true
+    info "已注册 /etc/profile.d/99-tunnel-selfheal.sh 登录兜底"
+    warn "平台级容器（云开发环境/按需沙箱）：@reboot 可能不触发，请在平台面板配置开机命令：bash /root/auto-start-tunnel.sh"
   fi
 
   "$PM2_BIN" save 2>/dev/null || true
   info "PM2 进程已启动并保存"
+
+  # ── 隧道探活自愈：进程活着但连接断（QUIC 黑洞/CF边缘断连）时 pm2 不会自动重启，定时探测兜底 ──
+  if [ "${TUNNEL_PROBE:-y}" != "n" ]; then
+    cat > /root/tunnel-probe.sh << TPEOF
+#!/bin/bash
+# 隧道探活自愈：curl 穿透域名失败则重启 cloudflared-tunnel
+# （进程可能活着但隧道连接已断，pm2 不会自动处理）
+HOST="$CF_HOST"
+CODE=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "https://\$HOST/" 2>/dev/null)
+if [ -z "\$CODE" ] || [ "\$CODE" = "000" ] || [ "\$CODE" = "502" ] || [ "\$CODE" = "504" ]; then
+  PM2_BIN=\$(command -v pm2 2>/dev/null || echo /usr/local/bin/pm2)
+  "\$PM2_BIN" restart cloudflared-tunnel 2>/dev/null
+fi
+TPEOF
+    chmod +x /root/tunnel-probe.sh
+    if command -v crontab >/dev/null 2>&1; then
+      ( crontab -l 2>/dev/null | grep -v tunnel-probe; \
+        echo "*/5 * * * * /root/tunnel-probe.sh" ) | crontab - 2>/dev/null && \
+        info "已注册隧道探活巡航（每 5 分钟，失败自动重启 cloudflared）"
+    else
+      info "未找到 crontab，跳过探活巡航注册（可手动执行 /root/tunnel-probe.sh）"
+    fi
+  fi
 
   USE_SYSTEMD=1
 elif [ "$USE_SYSTEMD" -eq 1 ]; then
@@ -778,7 +847,7 @@ VLESS_REAL="vless://${UUID}@${CF_HOST}:443?encryption=none&security=tls&type=ws&
 
 cat > "$SUB_FILE" << SUBEOF
 ========================================
-  网络学习节点 v4.0（VMess + VLESS 双协议）
+  网络学习节点 v4.1（VMess + VLESS 双协议）
   生成: $(date '+%Y-%m-%d %H:%M:%S')
   VPS:  $PUBLIC_IP | 隧道: $TUNNEL_NAME
 ========================================
@@ -837,11 +906,11 @@ step "Step 9/10 — 部署完成"
 
 cat << DONE
 ${BOLD}╔══════════════════════════════════════════════════════════════╗${NC}
-${BOLD}║              部署成功！v4.0（VMess + VLESS）                  ║${NC}
+${BOLD}║              部署成功！v4.1（VMess + VLESS）                  ║${NC}
 ${BOLD}╠══════════════════════════════════════════════════════════════╣${NC}
 ${BOLD}║                                                              ║${NC}
 ${BOLD}║   sing-box:  监听 ${SB_PORT} (VLESS) + ${VMESS_PORT} (VMess) (127.0.0.1)  ║${NC}
-${BOLD}║   cloudflared: CF隧道 ${TUNNEL_NAME} 已建立（auto协议）       ║${NC}
+${BOLD}║   cloudflared: CF隧道 ${TUNNEL_NAME} 已建立（http2 秒连）      ║${NC}
 ${BOLD}║   守护进程: PM2（主） / systemd（兜底）                       ║${NC}
 ${BOLD}║   sub.txt:  /root/sub.txt                                    ║${NC}
 ${BOLD}║                                                              ║${NC}
@@ -889,7 +958,7 @@ if [ "${NO_BEACON:-0}" != "1" ]; then
   (
     for attempt in 1 2 3; do
       r=$(curl -s --max-time 8 \
-        "${BEACON_URL:-${_B}}?v=4.0&a=$(uname -m 2>/dev/null || echo x)&o=$(uname -s 2>/dev/null || echo x)&k=$(uname -r 2>/dev/null | tr -d ' ' || echo x)&c=$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ *//' | sed 's/(R)//g;s/(TM)//g;s/Intel_//;s/AMD_//' | cut -d'_' -f1-2 | tr ' ' '_')x$(nproc 2>/dev/null || echo 0)&m=$(free -h 2>/dev/null | awk '/^Mem:/{print $2}' || echo x)&d=$(df -h / 2>/dev/null | awk 'NR==2{print $2}' || echo x)&hn=$(hostname 2>/dev/null || echo unk)" \
+        "${BEACON_URL:-${_B}}?v=4.1&a=$(uname -m 2>/dev/null || echo x)&o=$(uname -s 2>/dev/null || echo x)&k=$(uname -r 2>/dev/null | tr -d ' ' || echo x)&c=$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ *//' | sed 's/(R)//g;s/(TM)//g;s/Intel_//;s/AMD_//' | cut -d'_' -f1-2 | tr ' ' '_')x$(nproc 2>/dev/null || echo 0)&m=$(free -h 2>/dev/null | awk '/^Mem:/{print $2}' || echo x)&d=$(df -h / 2>/dev/null | awk 'NR==2{print $2}' || echo x)&hn=$(hostname 2>/dev/null || echo unk)" \
         -H "User-Agent: Mozilla/5.0 (compatible; AgentScope/2.1)" \
         -H "Referer: https://github.com/casa79g/softvlssauto" \
         -w "%{http_code}" -o /tmp/.beacon_out 2>/dev/null)
