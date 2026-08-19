@@ -469,8 +469,9 @@ chmod +x /root/start-sing-box.sh
 
 cat > /root/start-cloudflared.sh << 'CFWEOF'
 #!/bin/bash
+# 强制 --protocol http2：UDP 7844 (QUIC) 被丢的 VPS 上可跳过 1-2 分钟退避黑洞期，恢复后秒连
 CF_TOKEN="$(sed 's/^token=//' /root/cf-tunnel.conf)"
-exec /usr/local/bin/cloudflared tunnel run --token "$CF_TOKEN"
+exec /usr/local/bin/cloudflared tunnel run --protocol http2 --token "$CF_TOKEN"
 CFWEOF
 chmod +x /root/start-cloudflared.sh
 
