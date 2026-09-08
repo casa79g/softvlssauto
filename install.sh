@@ -194,15 +194,12 @@ info "sing-box VMess 监听端口: $VMESS_PORT（固定）"
 # ================================================================
 step "Step 2.5/10 — 网络检测"
 
-GITHUB_OK=0; NAS_OK=0; MIRROR_OK=0
+GITHUB_OK=0; MIRROR_OK=0
 # 检测实际下载域名 (raw.githubusercontent.com), 8s 超时, 主页域名兜底
 curl -sI --max-time 8 https://raw.githubusercontent.com >/dev/null 2>&1 && GITHUB_OK=1
 [ "$GITHUB_OK" -eq 0 ] && curl -sI --max-time 8 https://github.com >/dev/null 2>&1 && GITHUB_OK=1
 curl -sI --max-time 8 https://ghproxy.net >/dev/null 2>&1 && MIRROR_OK=1
-NAS_BASE="${NAS_BASE:-http://47.84.122.196:8900}"
-curl -sI --max-time 5 "${NAS_BASE}/sing-box" >/dev/null 2>&1 && NAS_OK=1
 
-[ "$NAS_OK" -eq 1 ] && echo "  ${GREEN}✓ NAS 本地源可达${NC}" || echo "  ${YELLOW}✗ NAS 本地源不可达${NC}"
 [ "$GITHUB_OK" -eq 1 ] && echo "  ${GREEN}✓ GitHub 可达${NC}" || echo "  ${YELLOW}✗ GitHub 不可达${NC}"
 [ "$MIRROR_OK" -eq 1 ] && echo "  ${GREEN}✓ 国内镜像可用${NC}" || echo "  ${YELLOW}✗ 国内镜像不可达${NC}"
 [ "$GITHUB_OK" -eq 0 ] && [ "$MIRROR_OK" -eq 0 ] && error "所有下载源均不可达 (GitHub/镜像均失败)"
@@ -219,11 +216,6 @@ SB_VER="${SB_VERSION:-1.13.18}"; SB_TAR="sing-box-${SB_VER}-linux-${R_ARCH}.tar.
 SB_URL="https://github.com/SagerNet/sing-box/releases/download/v${SB_VER}/${SB_TAR}"
 SB_MIRROR="https://gitlab.com/rwkgyg/sing-box-yg/-/raw/main/${SB_TAR}"
 SB_DL=0
-
-if [ "$NAS_OK" -eq 1 ]; then
-  curl -sL -o /usr/local/bin/sing-box "${NAS_BASE}/sing-box" --retry 2 2>/dev/null
-  [ -f /usr/local/bin/sing-box ] && [ "$(xxd -l 4 /usr/local/bin/sing-box | awk '{print $2}')" = "7f45" ] && SB_DL=1
-fi
 
 if [ "$SB_DL" -eq 0 ]; then
   for try_url in "$SB_URL" "https://ghproxy.net/${SB_URL}" "$SB_MIRROR"; do
@@ -244,11 +236,6 @@ chmod +x /usr/local/bin/sing-box; info "sing-box 下载完成"
 CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${R_ARCH}"
 CF_MIRROR="https://gitlab.com/rwkgyg/sing-box-yg/-/raw/main/${R_ARCH}"
 CF_DL=0
-
-if [ "$NAS_OK" -eq 1 ]; then
-  curl -sL -o /usr/local/bin/cloudflared "${NAS_BASE}/cloudflared" --retry 2 2>/dev/null
-  [ -f /usr/local/bin/cloudflared ] && [ "$(xxd -l 4 /usr/local/bin/cloudflared | awk '{print $2}')" = "7f45" ] && CF_DL=1
-fi
 
 if [ "$CF_DL" -eq 0 ]; then
   for try_url in "$CF_URL" "https://ghproxy.net/${CF_URL}" "$CF_MIRROR"; do
