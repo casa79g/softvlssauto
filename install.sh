@@ -430,8 +430,8 @@ fi
 cat >> "$SB_DIR/sb.json" << SBEOF2
   ],
   "dns": {
-    "servers": [{ "tag": "doh", "address": "https://1.1.1.1/dns-query" }],
-    "strategy": "prefer_ipv4"
+    "servers": [{ "tag": "local-dns", "type": "local" }],
+    "strategy": "prefer_ipv6"
   },
   "route": {
     "rules": [{ "domain": ["geosite:google"], "outbound": "direct" }],
@@ -622,6 +622,43 @@ else
 fi
 
 # ================================================================
+# ================================================================
+# Step 5.8 — systemd 优先部署 (有 systemd 时走这里, 比 PM2 干净可靠)
+# ================================================================
+SKIP_PM2=0
+if [ "$USE_SYSTEMD" -eq 1 ]; then
+  info "systemd 可用: 使用 systemd 单元部署 sing-box + cloudflared (跳过 PM2)"
+
+  cat > /etc/systemd/system/sing-box-vless.service << SBUNITEOF
+[Unit]
+Description=sing-box VLESS/VMess
+After=network.target
+[Service]
+ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/sb.json
+Restart=always
+RestartSec=2
+[Install]
+WantedBy=multi-user.target
+SBUNITEOF
+
+  cat > /etc/systemd/system/cloudflared-tunnel.service << CFTUNITEOF
+[Unit]
+Description=cloudflared tunnel
+After=network.target
+[Service]
+ExecStart=/root/start-cloudflared.sh
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=multi-user.target
+CFTUNITEOF
+
+  systemctl daemon-reload
+  systemctl enable --now sing-box-vless cloudflared-tunnel
+  SKIP_PM2=1
+  info "systemd 单元已启动并设置开机自启"
+fi
+
 # Step 6 — 启动（PM2 优先 / systemd 兜底）
 # ================================================================
 step "Step 6/10 — 启动（PM2 优先）"
@@ -652,8 +689,12 @@ if [ "$PM2_OK" -eq 1 ]; then
 
   PM2_BIN=$(command -v pm2 || echo "/usr/local/bin/pm2")
 
-  "$PM2_BIN" start /root/cf-tunnel-ecosystem.json 2>/dev/null || \
-    npx pm2 start /root/cf-tunnel-ecosystem.json 2>/dev/null
+  if [ "$SKIP_PM2" -eq 1 ]; then
+    info "systemd 已接管进程管理, 跳过 PM2 启动"
+  else
+    "$PM2_BIN" start /root/cf-tunnel-ecosystem.json 2>/dev/null || \
+      npx pm2 start /root/cf-tunnel-ecosystem.json 2>/dev/null
+  fi
   sleep 3
 
   if [ "$USE_SYSTEMD" -eq 1 ]; then
