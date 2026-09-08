@@ -124,6 +124,16 @@ for cmd in curl wget jq python3 file openssl base64; do
   fi
 done
 
+# ── IPv6-only 环境自动适配: 无 IPv4 出站时启用 DNS64+NAT64 (v4-only 网站可达) ──
+V4_OUT=1
+curl -4 -s --max-time 6 -o /dev/null https://www.cloudflare.com || V4_OUT=0
+if [ "$V4_OUT" -eq 0 ]; then
+  warn "检测到 IPv4 出站不可用 (IPv6-only 服务器), 自动启用 DNS64+NAT64"
+  cp /etc/resolv.conf /etc/resolv.conf.bak-softvlss 2>/dev/null || true
+  printf 'nameserver 2a00:1098:2b::1\nnameserver 2a01:4f9:c010:3f66::1\n' > /etc/resolv.conf
+  info "DNS64 已配置 (dns64.lt 公共服务), 仅 IPv4 网站 将经 NAT64 访问"
+fi
+
 # ================================================================
 # Step 2 — 端口扫描
 # ================================================================
@@ -468,6 +478,13 @@ else:
     print('  ✅ sb.json 校验通过')
 " || error "sb.json 校验失败"
 
+# ── sing-box 官方配置预检 (格式错误快速失败, 避免 alter_id 类问题) ──
+if /usr/local/bin/sing-box check -c "$SB_DIR/sb.json" 2>/tmp/sb-check.err; then
+  info "sing-box 配置预检通过"
+else
+  error "sb.json 配置非法: $(head -c 200 /tmp/sb-check.err)"
+fi
+
 info "sing-box 配置已写入 $SB_DIR/sb.json（VLESS:$SB_PORT + VMess:$VMESS_PORT）"
 
 # ── 写入 Cloudflare Token 到安全文件 ──
@@ -536,6 +553,28 @@ for _tool in gen_links.sh query.sh uninstall.sh; do
   fi
 done
 info "管理脚本已拷贝至 /root/（gen_links.sh / query.sh / uninstall.sh）"
+
+# ── 一键状态体检工具 ──
+cat > /root/status.sh << 'STATUSEOF'
+#!/bin/bash
+echo "══════════ 服务状态 ══════════"
+for s in sing-box-vless cloudflared-tunnel; do
+  st=$(systemctl is-active "$s" 2>/dev/null)
+  [ "$st" = "active" ] && mark="OK" || mark="DOWN"
+  printf "  %-22s %s %s\n" "$s" "$mark" "$st"
+done
+echo "══════════ 节点端口 ══════════"
+curl -s -o /dev/null --max-time 3 -w "  8001 (VLESS):  %{http_code}\n" http://127.0.0.1:8001/ 2>/dev/null
+curl -s -o /dev/null --max-time 3 -w "  8003 (VMess):  %{http_code}\n" http://127.0.0.1:8003/ 2>/dev/null
+echo "══════════ 出站健康 ══════════"
+curl -s -o /dev/null --max-time 8 -w "  v6出站: %{http_code}\n" -6 https://www.cloudflare.com/ 2>/dev/null
+curl -s -o /dev/null --max-time 15 -w "  v4出站(NAT64): %{http_code}\n" http://example.com/ 2>/dev/null
+echo "  出口IP: $(curl -s --max-time 8 ifconfig.me 2>/dev/null)"
+echo "══════════ 最近错误 ══════════"
+journalctl -u sing-box-vless -n 200 --no-pager 2>/dev/null | grep -i error | tail -3 || echo "  (无)"
+STATUSEOF
+chmod +x /root/status.sh
+info "体检工具已部署: bash /root/status.sh"
 
 # ================================================================
 # Step 5.5 — CF 隧道路由规则配置（自动）
