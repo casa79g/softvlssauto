@@ -409,30 +409,6 @@ cat > "$SB_DIR/sb.json" << SBEOF
     }
 SBEOF
 
-# ── 用 Python 校验 sb.json 完整性（防止 heredoc 变量展开导致 JSON 损坏） ──
-python3 -c "
-import json, sys
-path = '${SB_DIR}/sb.json'
-with open(path) as f:
-    d = json.load(f)
-missing = []
-for b in d.get('inbounds', []):
-    tag = b.get('tag', '?')
-    if 'users' not in b:
-        missing.append(tag)
-        if tag == 'vmess-ws-in':
-            b['users'] = [{'uuid': '${UUID}'}]
-        elif tag == 'vless-ws-in':
-            b['users'] = [{'uuid': '${UUID}'}]
-if missing:
-    print(f'  ⚠️ 修复缺失 users 的 inbounds: {missing}')
-    with open(path, 'w') as f:
-        json.dump(d, f, indent=2)
-    print('  ✅ sb.json 已修复')
-else:
-    print('  ✅ sb.json 校验通过')
-" || error "sb.json 校验失败"
-
 if [ "$USE_GRPC" = "y" ] || [ "$USE_GRPC" = "Y" ]; then
   cat >> "$SB_DIR/sb.json" << GRPEOF
     ,
@@ -467,6 +443,30 @@ cat >> "$SB_DIR/sb.json" << SBEOF2
   ]
 }
 SBEOF2
+
+# ── 用 Python 校验 sb.json 完整性（防止 heredoc 变量展开导致 JSON 损坏） ──
+python3 -c "
+import json, sys
+path = '${SB_DIR}/sb.json'
+with open(path) as f:
+    d = json.load(f)
+missing = []
+for b in d.get('inbounds', []):
+    tag = b.get('tag', '?')
+    if 'users' not in b:
+        missing.append(tag)
+        if tag == 'vmess-ws-in':
+            b['users'] = [{'uuid': '${UUID}'}]
+        elif tag == 'vless-ws-in':
+            b['users'] = [{'uuid': '${UUID}'}]
+if missing:
+    print(f'  ⚠️ 修复缺失 users 的 inbounds: {missing}')
+    with open(path, 'w') as f:
+        json.dump(d, f, indent=2)
+    print('  ✅ sb.json 已修复')
+else:
+    print('  ✅ sb.json 校验通过')
+" || error "sb.json 校验失败"
 
 info "sing-box 配置已写入 $SB_DIR/sb.json（VLESS:$SB_PORT + VMess:$VMESS_PORT）"
 
