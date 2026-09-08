@@ -8,7 +8,7 @@
 set -uo pipefail
 
 GREEN='\033[0;32m'; RED='\033[0;31m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'; MAGENTA='\033[0;35m'
-NC='\033[0m'; BOLD='\033[1m]'
+NC='\033[0m'; BOLD='\033[1m'
 
 info()  { echo -e "  ${GREEN}[INFO]${NC} $1"; }
 warn()  { echo -e "  ${YELLOW}[WARN]${NC} $1"; }
@@ -56,7 +56,7 @@ fi
 # ================================================================
 # 目录自愈：修正 git clone 嵌套问题
 # ================================================================
-SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd)"
 SCRIPT_BASENAME="$(basename "$SELF_DIR")"
 SELF_PARENT="$(dirname "$SELF_DIR")"
 
@@ -155,11 +155,15 @@ for PORT in 80 443 8001 8002 8003 8080 8443 3000; do
   if scan_port "$PORT"; then
     PID=$(port_pid "$PORT")
     CMD=$(port_cmd "$PORT")
-    STATUS="${RED}已占用${NC}"; EXTRA="${PID:-?} ${CMD}"
+    EXTRA="${PID:-?} ${CMD}"
   else
-    STATUS="${GREEN}空闲${NC}"; EXTRA=""
+    EXTRA=""
   fi
-  printf "  ${BOLD}│ %6d │ %-6s │ %-20s │${NC}\n" "$PORT" "$STATUS" "$EXTRA"
+  if scan_port "$PORT"; then
+    printf "  ${BOLD}│ %6d │ ${RED}已占用${NC} │ %-20s │${NC}\n" "$PORT" "$EXTRA"
+  else
+    printf "  ${BOLD}│ %6d │ ${GREEN}空闲${NC} │ %-20s │${NC}\n" "$PORT" "$EXTRA"
+  fi
 done
 printf "  ${BOLD}└──────────┴────────┴──────────────────────┘${NC}\n"
 
@@ -190,14 +194,18 @@ info "sing-box VMess 监听端口: $VMESS_PORT（固定）"
 # ================================================================
 step "Step 2.5/10 — 网络检测"
 
-GITHUB_OK=0; NAS_OK=0
-curl -sI --max-time 5 https://github.com >/dev/null 2>&1 && GITHUB_OK=1
+GITHUB_OK=0; NAS_OK=0; MIRROR_OK=0
+# 检测实际下载域名 (raw.githubusercontent.com), 8s 超时, 主页域名兜底
+curl -sI --max-time 8 https://raw.githubusercontent.com >/dev/null 2>&1 && GITHUB_OK=1
+[ "$GITHUB_OK" -eq 0 ] && curl -sI --max-time 8 https://github.com >/dev/null 2>&1 && GITHUB_OK=1
+curl -sI --max-time 8 https://ghproxy.net >/dev/null 2>&1 && MIRROR_OK=1
 NAS_BASE="${NAS_BASE:-http://47.84.122.196:8900}"
 curl -sI --max-time 5 "${NAS_BASE}/sing-box" >/dev/null 2>&1 && NAS_OK=1
 
 [ "$NAS_OK" -eq 1 ] && echo "  ${GREEN}✓ NAS 本地源可达${NC}" || echo "  ${YELLOW}✗ NAS 本地源不可达${NC}"
 [ "$GITHUB_OK" -eq 1 ] && echo "  ${GREEN}✓ GitHub 可达${NC}" || echo "  ${YELLOW}✗ GitHub 不可达${NC}"
-[ "$GITHUB_OK" -eq 0 ] && [ "$NAS_OK" -eq 0 ] && error "所有下载源均不可达"
+[ "$MIRROR_OK" -eq 1 ] && echo "  ${GREEN}✓ 国内镜像可用${NC}" || echo "  ${YELLOW}✗ 国内镜像不可达${NC}"
+[ "$GITHUB_OK" -eq 0 ] && [ "$MIRROR_OK" -eq 0 ] && error "所有下载源均不可达 (GitHub/镜像均失败)"
 
 # ================================================================
 # Step 3 — 下载二进制
@@ -218,7 +226,7 @@ if [ "$NAS_OK" -eq 1 ]; then
 fi
 
 if [ "$SB_DL" -eq 0 ]; then
-  for try_url in "$SB_URL" "$SB_MIRROR"; do
+  for try_url in "$SB_URL" "https://ghproxy.net/${SB_URL}" "$SB_MIRROR"; do
     mkdir -p /tmp/sb-dl
     curl -sL -o /tmp/sb-dl/sb.tar.gz "$try_url" --retry 2 2>/dev/null
     if [ -f /tmp/sb-dl/sb.tar.gz ] && [ "$(xxd -l 2 /tmp/sb-dl/sb.tar.gz | awk '{print $2}')" = "1f8b" ]; then
@@ -243,7 +251,7 @@ if [ "$NAS_OK" -eq 1 ]; then
 fi
 
 if [ "$CF_DL" -eq 0 ]; then
-  for try_url in "$CF_URL" "$CF_MIRROR"; do
+  for try_url in "$CF_URL" "https://ghproxy.net/${CF_URL}" "$CF_MIRROR"; do
     curl -sL -o /tmp/cf-bin "$try_url" --retry 2 2>/dev/null
     if [ -f /tmp/cf-bin ] && [ "$(xxd -l 4 /tmp/cf-bin | awk '{print $2}')" = "7f45" ]; then
       cp /tmp/cf-bin /usr/local/bin/cloudflared && CF_DL=1 && break
