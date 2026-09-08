@@ -214,13 +214,13 @@ if [ "$ARCH" = "x86_64" ]; then R_ARCH="amd64"; elif [ "$ARCH" = "aarch64" ]; th
 # ── sing-box ──
 SB_VER="${SB_VERSION:-1.13.18}"; SB_TAR="sing-box-${SB_VER}-linux-${R_ARCH}.tar.gz"
 SB_URL="https://github.com/SagerNet/sing-box/releases/download/v${SB_VER}/${SB_TAR}"
-SB_MIRROR="https://gitlab.com/rwkgyg/sing-box-yg/-/raw/main/${SB_TAR}"
+
 SB_DL=0
 
 if [ "$SB_DL" -eq 0 ]; then
-  for try_url in "$SB_URL" "https://ghproxy.net/${SB_URL}" "$SB_MIRROR"; do
+  for try_url in "$SB_URL" "https://ghproxy.net/${SB_URL}"; do
     mkdir -p /tmp/sb-dl
-    curl -sL -o /tmp/sb-dl/sb.tar.gz "$try_url" --retry 2 2>/dev/null
+    curl -sL --connect-timeout 10 -o /tmp/sb-dl/sb.tar.gz "$try_url" --retry 3 2>/dev/null
     if [ -f /tmp/sb-dl/sb.tar.gz ] && [ "$(od -An -tx1 -N2 /tmp/sb-dl/sb.tar.gz | tr -d ' \n')" = "1f8b" ]; then
       tar xzf /tmp/sb-dl/sb.tar.gz -C /tmp/sb-dl/ 2>/dev/null
       EXTRACTED=$(find /tmp/sb-dl -name "sing-box" -type f -size +1M 2>/dev/null | head -1)
@@ -234,20 +234,31 @@ chmod +x /usr/local/bin/sing-box; info "sing-box 下载完成"
 
 # ── cloudflared ──
 CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${R_ARCH}"
-CF_MIRROR="https://gitlab.com/rwkgyg/sing-box-yg/-/raw/main/${R_ARCH}"
+
 CF_DL=0
 
 if [ "$CF_DL" -eq 0 ]; then
-  for try_url in "$CF_URL" "https://ghproxy.net/${CF_URL}" "$CF_MIRROR"; do
-    curl -sL -o /tmp/cf-bin "$try_url" --retry 2 2>/dev/null
+  for try_url in "https://ghproxy.net/${CF_URL}" "$CF_URL"; do
+    curl -sL --connect-timeout 10 -o /tmp/cf-bin "$try_url" --retry 3 2>/dev/null
     if [ -f /tmp/cf-bin ] && [ "$(od -An -tx1 -N4 /tmp/cf-bin | tr -d ' \n')" = "7f45" ]; then
       cp /tmp/cf-bin /usr/local/bin/cloudflared && CF_DL=1 && break
     fi
   done
   rm -f /tmp/cf-bin
 fi
+if [ "$CF_DL" -eq 0 ] && command -v apt-get >/dev/null 2>&1; then
+  info "尝试 pkg.cloudflare.com 官方源安装 cloudflared ..."
+  mkdir -p /usr/local/share/keyrings
+  if curl -fsSL --connect-timeout 10 --max-time 60 https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/local/share/keyrings/cloudflare-main.gpg 2>/dev/null; then
+    echo "deb [signed-by=/usr/local/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" > /etc/apt/sources.list.d/cloudflared.list
+    apt-get update -qq 2>/dev/null
+    apt-get install -y -qq cloudflared 2>/dev/null
+    [ -f /usr/bin/cloudflared ] && ln -sf /usr/bin/cloudflared /usr/local/bin/cloudflared
+    [ -x /usr/local/bin/cloudflared ] && CF_DL=1
+  fi
+fi
 [ "$CF_DL" -eq 0 ] && error "cloudflared 下载失败"
-chmod +x /usr/local/bin/cloudflared; info "cloudflared 下载完成"
+chmod +x /usr/local/bin/cloudflared 2>/dev/null; info "cloudflared 下载完成"
 
 # ── Node.js + PM2 ──
 info "检测 Node.js ..."
