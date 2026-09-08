@@ -216,6 +216,9 @@ SB_VER="${SB_VERSION:-1.13.18}"; SB_TAR="sing-box-${SB_VER}-linux-${R_ARCH}.tar.
 SB_URL="https://github.com/SagerNet/sing-box/releases/download/v${SB_VER}/${SB_TAR}"
 
 SB_DL=0
+# 已安装检查: 二进制存在且为有效 ELF 则跳过下载
+[ -f /usr/local/bin/sing-box ] && [ "$(od -An -tx1 -N4 /usr/local/bin/sing-box | tr -d ' \n')" = "7f454c46" ] && SB_DL=1
+[ "$SB_DL" -eq 1 ] && info "sing-box 已安装，跳过下载"
 
 if [ "$SB_DL" -eq 0 ]; then
   for try_url in "$SB_URL" "https://ghproxy.net/${SB_URL}"; do
@@ -236,6 +239,8 @@ chmod +x /usr/local/bin/sing-box; info "sing-box 下载完成"
 CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${R_ARCH}"
 
 CF_DL=0
+[ -f /usr/local/bin/cloudflared ] && [ "$(od -An -tx1 -N4 /usr/local/bin/cloudflared | tr -d ' \n')" = "7f454c46" ] && CF_DL=1
+[ "$CF_DL" -eq 1 ] && info "cloudflared 已安装，跳过下载"
 
 if [ "$CF_DL" -eq 0 ]; then
   for try_url in "https://ghproxy.net/${CF_URL}" "$CF_URL"; do
