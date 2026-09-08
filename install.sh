@@ -221,7 +221,7 @@ if [ "$SB_DL" -eq 0 ]; then
   for try_url in "$SB_URL" "https://ghproxy.net/${SB_URL}" "$SB_MIRROR"; do
     mkdir -p /tmp/sb-dl
     curl -sL -o /tmp/sb-dl/sb.tar.gz "$try_url" --retry 2 2>/dev/null
-    if [ -f /tmp/sb-dl/sb.tar.gz ] && [ "$(xxd -l 2 /tmp/sb-dl/sb.tar.gz | awk '{print $2}')" = "1f8b" ]; then
+    if [ -f /tmp/sb-dl/sb.tar.gz ] && [ "$(od -An -tx1 -N2 /tmp/sb-dl/sb.tar.gz | tr -d ' \n')" = "1f8b" ]; then
       tar xzf /tmp/sb-dl/sb.tar.gz -C /tmp/sb-dl/ 2>/dev/null
       EXTRACTED=$(find /tmp/sb-dl -name "sing-box" -type f -size +1M 2>/dev/null | head -1)
       [ -n "$EXTRACTED" ] && cp "$EXTRACTED" /usr/local/bin/sing-box && SB_DL=1 && break
@@ -240,7 +240,7 @@ CF_DL=0
 if [ "$CF_DL" -eq 0 ]; then
   for try_url in "$CF_URL" "https://ghproxy.net/${CF_URL}" "$CF_MIRROR"; do
     curl -sL -o /tmp/cf-bin "$try_url" --retry 2 2>/dev/null
-    if [ -f /tmp/cf-bin ] && [ "$(xxd -l 4 /tmp/cf-bin | awk '{print $2}')" = "7f45" ]; then
+    if [ -f /tmp/cf-bin ] && [ "$(od -An -tx1 -N4 /tmp/cf-bin | tr -d ' \n')" = "7f45" ]; then
       cp /tmp/cf-bin /usr/local/bin/cloudflared && CF_DL=1 && break
     fi
   done
